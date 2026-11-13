@@ -25,6 +25,10 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# Meeting transcripts and local scratch
+dialogue.txt
+dialogue*.txt
+
 # OS metadata & temporary files
 .DS_Store
 Thumbs.db
