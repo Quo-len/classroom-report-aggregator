@@ -1,0 +1,279 @@
+import { AuthService } from './services/auth.service';
+import { ClassroomService, CourseAssignment, StudentSubmissionItem } from './services/classroom.service';
+import { SheetsService } from './services/sheets.service';
+import { DriveService, DownloadedAsset } from './services/drive.service';
+import { NotifyService } from './services/notify.service';
+import { Aggregator } from './core/aggregator';
+import { env } from './config/env';
+
+/**
+ * Custom logger helper with timestamp
+ */
+function logInfo(message: string): void {
+  const timestamp = new Date().toISOString();
+  console.log(`[${timestamp}] ℹ️  ${message}`);
+}
+
+function logError(message: string, error?: any): void {
+  const timestamp = new Date().toISOString();
+  console.error(`[${timestamp}] ❌ ${message}`, error || '');
+}
+
+/**
+ * Action: Interactive OAuth Initialization
+ */
+async function runAuthInit(): Promise<void> {
+  console.log('🚀 Running Google OAuth2 Authorization Initialization...');
+  await AuthService.getAuthClient();
+  console.log('✅ Google Auth initialization completed successfully.');
+}
+
+/**
+ * Action 1: Monitoring Phase
+ * Polls Google Classroom for assignment, extracts metadata and deadline
+ */
+async function runMonitoringPhase(): Promise<{ assignment: CourseAssignment; submissions: StudentSubmissionItem[] } | null> {
+  logInfo(`=== STAGE 1: MONITORING PHASE ===`);
+  const assignment = await ClassroomService.getTargetAssignment();
+
+  if (!assignment) {
+    logError(`Assignment "${env.ASSIGNMENT_NAME}" could not be found in course ${env.CLASSROOM_COURSE_ID}.`);
+    return null;
+  }
+
+  const submissions = await ClassroomService.getSubmissions(assignment.id);
+  const submittedCount = submissions.filter((s) => s.hasSubmitted).length;
+  const missingCount = submissions.length - submittedCount;
+
+  console.log('\n📊 === MONITORING SUMMARY ===');
+  console.log(`📌 Assignment: ${assignment.title}`);
+  console.log(`📅 Published in Classroom: ${assignment.creationDateFormatted}`);
+  console.log(`⏰ Deadline: ${assignment.deadlineFormatted}`);
+  console.log(`⏳ Days Remaining: ${assignment.daysRemaining !== null ? assignment.daysRemaining : 'N/A'}`);
+  console.log(`👥 Total teachers: ${submissions.length} (${submittedCount} submitted, ${missingCount} pending)`);
+  console.log('==============================\n');
+
+  return { assignment, submissions };
+}
+
+/**
+ * Action 2: T-minus 3 Days (Draft & Warn)
+ * - Generate preliminary master Google Sheet based only on currently submitted files
+ * - Send email reminder via Gmail to teachers who have not submitted (warning: 48h left)
+ * - Send direct message via Telegram and email to Head of Dept listing missing teachers
+ */
+async function runDraftPhase(
+  existingAssignment?: CourseAssignment,
+  existingSubmissions?: StudentSubmissionItem[]
+): Promise<string | null> {
+  logInfo(`=== STAGE 2: T-MINUS 3 DAYS (DRAFT & WARN) ===`);
+
+  const assignment = existingAssignment || (await ClassroomService.getTargetAssignment());
+  if (!assignment) {
+    logError('Cannot run Draft Phase: Assignment not found.');
+    return null;
+  }
+
+  const submissions = existingSubmissions || (await ClassroomService.getSubmissions(assignment.id));
+  const missingTeachers = submissions
+    .filter((s) => !s.hasSubmitted)
+    .map((s) => ({ name: s.studentName, email: s.studentEmail }));
+
+  // 1. Build and generate preliminary master sheet
+  const aggregatedData = await Aggregator.aggregateAll(assignment, submissions, 'Чернетка (T-3)');
+  const masterGrid = Aggregator.buildMasterGrid(aggregatedData);
+
+  const sheetTitle = `[ЧЕРНЕТКА Т-3] Зведений звіт кафедри - ${assignment.title} (${new Date().toISOString().split('T')[0]})`;
+  const { spreadsheetId, webViewLink } = await SheetsService.createOrUpdateMasterSheet(sheetTitle, masterGrid);
+
+  logInfo(`Preliminary master sheet generated: ${webViewLink}`);
+
+  // 2. Send email reminder to teachers who have not submitted (48 hours left)
+  await NotifyService.sendMissingTeachersReminder(missingTeachers);
+
+  // 3. Send Telegram and email to Head of Department with missing list
+  await NotifyService.notifyHeadOfDeptMissingList(missingTeachers, webViewLink);
+
+  logInfo(`Draft & Warn phase completed successfully.`);
+  return webViewLink;
+}
+
+/**
+ * Action 3: T-minus 1 Day (Reconciliation)
+ * - Check for late submissions
+ * - Recalculate all sums and update master Google Sheet
+ */
+async function runReconcilePhase(
+  existingAssignment?: CourseAssignment,
+  existingSubmissions?: StudentSubmissionItem[]
+): Promise<string | null> {
+  logInfo(`=== STAGE 3: T-MINUS 1 DAY (RECONCILIATION) ===`);
+
+  const assignment = existingAssignment || (await ClassroomService.getTargetAssignment());
+  if (!assignment) {
+    logError('Cannot run Reconciliation Phase: Assignment not found.');
+    return null;
+  }
+
+  const submissions = existingSubmissions || (await ClassroomService.getSubmissions(assignment.id));
+  const aggregatedData = await Aggregator.aggregateAll(assignment, submissions, 'Звірення (T-1)');
+  const masterGrid = Aggregator.buildMasterGrid(aggregatedData);
+
+  const sheetTitle = `[ЗВІРЕННЯ Т-1] Зведений звіт кафедри - ${assignment.title}`;
+  const { spreadsheetId, webViewLink } = await SheetsService.createOrUpdateMasterSheet(sheetTitle, masterGrid);
+
+  const submittedCount = submissions.filter((s) => s.hasSubmitted).length;
+  logInfo(`Reconciled and updated master Google Sheet: ${webViewLink} (${submittedCount}/${submissions.length} submitted)`);
+
+  // Send update to Head of Department
+  const tgMsg = `
+<b>🔄 [Т-1 День] Звірення даних перед дедлайном</b>
+<b>Завдання:</b> ${assignment.title}
+<b>Подано звітів:</b> ${submittedCount} з ${submissions.length} викладачів
+<b>Оновлений звіт:</b> <a href="${webViewLink}">Переглянути оновлений звіт</a>
+  `.trim();
+  await NotifyService.sendTelegramMessage(tgMsg);
+
+  return webViewLink;
+}
+
+/**
+ * Action 4: Final Delivery (Deadline Day)
+ * - Generate final master Google Sheet
+ * - Download any .jpeg attachments found in submissions
+ * - Email final link + JPEGs to Scientific Dept and Head of Dept
+ * - Notify Head of Dept on Telegram
+ */
+async function runFinalPhase(
+  existingAssignment?: CourseAssignment,
+  existingSubmissions?: StudentSubmissionItem[]
+): Promise<string | null> {
+  logInfo(`=== STAGE 4: FINAL DELIVERY (DEADLINE DAY) ===`);
+
+  const assignment = existingAssignment || (await ClassroomService.getTargetAssignment());
+  if (!assignment) {
+    logError('Cannot run Final Delivery: Assignment not found.');
+    return null;
+  }
+
+  const submissions = existingSubmissions || (await ClassroomService.getSubmissions(assignment.id));
+  const submittedTeachers = submissions.filter((s) => s.hasSubmitted);
+
+  // 1. Generate final master sheet
+  const aggregatedData = await Aggregator.aggregateAll(assignment, submissions, 'Фінальний звіт (Дедлайн)');
+  const masterGrid = Aggregator.buildMasterGrid(aggregatedData);
+
+  const sheetTitle = `[ФІНАЛЬНИЙ] Зведений звіт кафедри - ${assignment.title}`;
+  const { spreadsheetId, webViewLink } = await SheetsService.createOrUpdateMasterSheet(sheetTitle, masterGrid);
+
+  // 2. Collect .jpeg attachments
+  logInfo('Collecting all .jpeg attachments from teacher submissions...');
+  const jpegFiles: DownloadedAsset[] = await DriveService.collectJpegAttachments(submittedTeachers);
+
+  // 3. Deliver email and notifications
+  await NotifyService.sendFinalDeliveryReport(
+    webViewLink,
+    jpegFiles,
+    submittedTeachers.length,
+    submissions.length
+  );
+
+  logInfo(`Final delivery completed successfully!`);
+  return webViewLink;
+}
+
+/**
+ * Automated Daily Workflow:
+ * Evaluates current date vs assignment deadline and executes appropriate stage
+ */
+async function runAutoDailyWorkflow(): Promise<void> {
+  logInfo('🚀 Starting Automated Daily Workflow...');
+  const result = await runMonitoringPhase();
+  if (!result) return;
+
+  const { assignment, submissions } = result;
+
+  if (assignment.daysRemaining === null) {
+    logInfo('No deadline specified for this assignment. Defaulting to general data aggregation.');
+    await runDraftPhase(assignment, submissions);
+    return;
+  }
+
+  const days = assignment.daysRemaining;
+  logInfo(`Evaluated timeline: ${days} days remaining until deadline.`);
+
+  if (days <= 0) {
+    logInfo(`Deadline reached (${days} days remaining). Executing Final Delivery.`);
+    await runFinalPhase(assignment, submissions);
+  } else if (days === 1) {
+    logInfo(`T-minus 1 day remaining. Executing Reconciliation phase.`);
+    await runReconcilePhase(assignment, submissions);
+  } else if (days <= 3) {
+    logInfo(`T-minus ${days} days remaining. Executing Draft & Warn phase.`);
+    await runDraftPhase(assignment, submissions);
+  } else {
+    logInfo(`More than 3 days remaining (${days} days). Monitoring complete. No alerts needed today.`);
+  }
+}
+
+/**
+ * CLI Help Display
+ */
+function printHelp(): void {
+  console.log(`
+Academic Department Automation System
+Usage:
+  npx tsx src/index.ts [options]
+  node dist/index.js [options]
+
+Options:
+  --monitor       Poll Google Classroom, print assignment metadata & current submission stats
+  --draft         Force execution of T-minus 3 Days workflow (Draft Sheet + Warn Missing Teachers + Telegram)
+  --reconcile     Force execution of T-minus 1 Day workflow (Reconcile submissions & recalculate sums)
+  --final         Force execution of Final Delivery (Final Sheet + JPEGs + Email to Sci Dept & Head)
+  --auto          (Default) Automatically detect timeline relative to deadline and run corresponding phase
+  --auth-init     Initiate interactive Google OAuth2 consent and generate token.json
+  --help, -h      Display this help message
+  `);
+}
+
+/**
+ * Main Entry Point
+ */
+async function main() {
+  const args = process.argv.slice(2);
+
+  if (args.includes('--help') || args.includes('-h')) {
+    printHelp();
+    process.exit(0);
+  }
+
+  try {
+    if (args.includes('--auth-init')) {
+      await runAuthInit();
+    } else if (args.includes('--monitor')) {
+      await runMonitoringPhase();
+    } else if (args.includes('--draft')) {
+      await runDraftPhase();
+    } else if (args.includes('--reconcile')) {
+      await runReconcilePhase();
+    } else if (args.includes('--final')) {
+      await runFinalPhase();
+    } else if (args.includes('--auto') || args.length === 0) {
+      await runAutoDailyWorkflow();
+    } else {
+      console.error(`Unknown argument(s): ${args.join(' ')}`);
+      printHelp();
+      process.exit(1);
+    }
+
+    logInfo('Program executed successfully with code 0.');
+    process.exit(0);
+  } catch (error) {
+    logError('Fatal error during execution:', error);
+    process.exit(1);
+  }
+}
+
+// Run CLI
+main();
