@@ -3,6 +3,7 @@ import { ClassroomService, CourseAssignment, StudentSubmissionItem } from './ser
 import { SheetsService } from './services/sheets.service';
 import { DriveService, DownloadedAsset } from './services/drive.service';
 import { NotifyService } from './services/notify.service';
+import { HealthService } from './services/health.service';
 import { Aggregator } from './core/aggregator';
 import { env } from './config/env';
 
@@ -231,6 +232,7 @@ Options:
   --draft         Force execution of T-minus 3 Days workflow (Draft Sheet + Warn Missing Teachers + Telegram)
   --reconcile     Force execution of T-minus 1 Day workflow (Reconcile submissions & recalculate sums)
   --final         Force execution of Final Delivery (Final Sheet + JPEGs + Email to Sci Dept & Head)
+  --healthcheck   Run diagnostic health checks on Google APIs & Telegram bot connectivity
   --auto          (Default) Automatically detect timeline relative to deadline and run corresponding phase
   --auth-init     Initiate interactive Google OAuth2 consent and generate token.json
   --help, -h      Display this help message
@@ -249,7 +251,10 @@ async function main() {
   }
 
   try {
-    if (args.includes('--auth-init')) {
+    if (args.includes('--healthcheck') || args.includes('--check')) {
+      const ok = await HealthService.runDiagnostics();
+      process.exit(ok ? 0 : 1);
+    } else if (args.includes('--auth-init')) {
       await runAuthInit();
     } else if (args.includes('--monitor')) {
       await runMonitoringPhase();
