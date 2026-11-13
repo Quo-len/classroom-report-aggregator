@@ -167,6 +167,33 @@ assert(metricsGarbage.size === 0, 'Corrupted buffer returns empty metrics withou
 const xlsxGarbage = DocParserService.parseXlsxBuffer(garbageBuffer);
 assert(xlsxGarbage.length === 0, 'Corrupted xlsx buffer returns empty grid without throwing');
 
+// ==========================================
+// 6. Testing Ready-Made Manual Test Docs (test/docs)
+// ==========================================
+console.log('\n📌 6. Testing Ready-Made Manual Test Docs (test/docs):');
+const ivanenkoDocxPath = path.resolve('test/docs/01_Викладач_Іваненко_О_В/Додаток_3_Публікації_Іваненко.docx');
+if (fs.existsSync(ivanenkoDocxPath)) {
+  const buf = fs.readFileSync(ivanenkoDocxPath);
+  const parsed = DocParserService.parseDocxBuffer(buf);
+  assert(parsed.paragraphs.length > 0, 'Ivanenko test docx has extracted paragraphs');
+  assert(parsed.tables.length > 0, 'Ivanenko test docx has extracted table');
+}
+
+const sydorenkoDocxPath = path.resolve('test/docs/03_Доцент_Сидоренко_А_П_нулі_та_прочерки/Додаток_3_Публікації_Сидоренко_прочерки.docx');
+if (fs.existsSync(sydorenkoDocxPath)) {
+  const buf = fs.readFileSync(sydorenkoDocxPath);
+  const parsed = DocParserService.parseDocxBuffer(buf);
+  const allText = parsed.paragraphs.join(' ');
+  assert(allText.includes('інформація відсутня') || allText.includes('-'), 'Sydorenko docx contains dash or "інформація відсутня"');
+}
+
+const petrenkoXlsxPath = path.resolve('test/docs/02_Професор_Петренко_В_М/2_Інформ._про_наук.роб_(заповнений_Петренко).xlsx');
+if (fs.existsSync(petrenkoXlsxPath)) {
+  const buf = fs.readFileSync(petrenkoXlsxPath);
+  const grid = DocParserService.parseXlsxBuffer(buf);
+  assert(grid.length > 50, 'Petrenko test xlsx contains full table grid');
+}
+
 // Summary
 console.log(`\n==============================================`);
 console.log(`Results: ${passedTests}/${totalTests} tests passed (${failedTests} failed)`);
