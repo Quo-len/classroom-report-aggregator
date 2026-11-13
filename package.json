@@ -6,9 +6,11 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
+    "serve": "tsx src/server.ts",
     "dev": "tsx src/index.ts",
     "test": "tsx test/test-aggregator.ts && tsx test/test-doc-parser.ts && tsx test/test-ai-service.ts",
     "test:manual": "tsx test/manual-test.ts",
+    "test:server": "tsx test/test-server.ts",
     "test:ai": "tsx test/test-ai-service.ts",
     "test:parser": "tsx test/test-doc-parser.ts",
     "check": "tsx src/index.ts --healthcheck",
@@ -25,9 +27,11 @@
   "author": "Antigravity Expert Backend Team",
   "license": "ISC",
   "dependencies": {
+    "@fastify/static": "^10.1.11",
     "@types/adm-zip": "^0.5.8",
     "adm-zip": "^0.6.1",
     "dotenv": "^16.4.7",
+    "fastify": "^5.12.8",
     "googleapis": "^144.0.0",
     "groq-sdk": "^1.6.0",
     "telegraf": "^4.16.3",

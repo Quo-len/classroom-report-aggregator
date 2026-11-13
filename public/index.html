@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>АІ-Секретар Кафедри | Панель Управління</title>
+  <style>
+    :root {
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --success: #16a34a;
+      --warning: #d97706;
+      --danger: #dc2626;
+      --bg: #f8fafc;
+      --card-bg: #ffffff;
+      --text: #0f172a;
+      --text-muted: #64748b;
+      --border: #e2e8f0;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      padding: 24px;
+    }
+
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .header-title h1 {
+      font-size: 24px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .header-title p {
+      color: var(--text-muted);
+      font-size: 14px;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 9999px;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+
+    .badge-online { background-color: #dcfce7; color: #15803d; }
+    .badge-offline { background-color: #fee2e2; color: #b91c1c; }
+
+    .grid-stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+
+    .stat-label {
+      font-size: 13px;
+      color: var(--text-muted);
+      font-weight: 500;
+      margin-bottom: 6px;
+    }
+
+    .stat-value {
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .controls-card {
+      margin-bottom: 24px;
+    }
+
+    .controls-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+
+    .controls-header h2 {
+      font-size: 18px;
+      font-weight: 600;
+    }
+
+    .dry-run-toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      background: #eff6ff;
+      padding: 6px 12px;
+      border-radius: 6px;
+      border: 1px solid #bfdbfe;
+      cursor: pointer;
+    }
+
+    .btn-group {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 12px;
+    }
+
+    button {
+      padding: 12px 16px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: all 0.15s ease-in-out;
+    }
+
+    button:hover { opacity: 0.95; transform: translateY(-1px); }
+    button:active { transform: translateY(0); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .btn-primary { background: var(--primary); color: white; }
+    .btn-warn { background: var(--warning); color: white; }
+    .btn-info { background: #0284c7; color: white; }
+    .btn-success { background: var(--success); color: white; }
+    .btn-secondary { background: #475569; color: white; }
+
+    .ai-summary-card {
+      background: #f0fdf4;
+      border-left: 4px solid var(--success);
+      margin-bottom: 24px;
+    }
+
+    .ai-summary-card h3 {
+      font-size: 16px;
+      color: #166534;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .ai-summary-card p {
+      font-size: 14px;
+      color: #1e293b;
+      font-style: italic;
+    }
+
+    .log-container {
+      background: #0f172a;
+      color: #f8fafc;
+      border-radius: 8px;
+      padding: 16px;
+      font-family: "Courier New", Courier, monospace;
+      font-size: 13px;
+      height: 260px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    .log-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .log-header h3 {
+      font-size: 14px;
+      color: #94a3b8;
+    }
+
+    .clear-btn {
+      background: transparent;
+      color: #94a3b8;
+      border: 1px solid #334155;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+
+    .clear-btn:hover { background: #1e293b; color: white; }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <header>
+      <div class="header-title">
+        <h1>🎓 АІ-Секретар Кафедри <span class="badge badge-online" id="serverStatusBadge">Сервер активний</span></h1>
+        <p>Автоматизація моніторингу Google Classroom, генерації зведених звітів, розсилки та ШІ-аналізу</p>
+      </div>
+      <div>
+        <button class="btn-secondary" onclick="fetchStatus()">🔄 Оновити дані</button>
+      </div>
+    </header>
+
+    <!-- Stats Overview -->
+    <div class="grid-stats">
+      <div class="card">
+        <div class="stat-label">Завдання в Classroom</div>
+        <div class="stat-value" id="statAssignmentName">Завантаження...</div>
+      </div>
+      <div class="card">
+        <div class="stat-label">Дедлайн здачі</div>
+        <div class="stat-value" id="statDeadline">--</div>
+      </div>
+      <div class="card">
+        <div class="stat-label">Днів залишилось</div>
+        <div class="stat-value" id="statDaysRemaining">--</div>
+      </div>
+      <div class="card">
+        <div class="stat-label">Здано звітів</div>
+        <div class="stat-value" id="statSubmissions">--</div>
+      </div>
+    </div>
+
+    <!-- AI Executive Summary Banner -->
+    <div class="card ai-summary-card" id="aiSummaryBlock" style="display: none;">
+      <h3>🤖 Аналітичне резюме кафедри (Groq AI):</h3>
+      <p id="aiSummaryText">Очікування запуску звіту...</p>
+    </div>
+
+    <!-- Actions & Triggers -->
+    <div class="card controls-card">
+      <div class="controls-header">
+        <h2>⚡ Ручний запуск операцій</h2>
+        <label class="dry-run-toggle">
+          <input type="checkbox" id="dryRunToggle" checked>
+          🧪 Dry-Run режим (безпечна симуляція без відправки реальних листів)
+        </label>
+      </div>
+
+      <div class="btn-group">
+        <button class="btn-primary" onclick="triggerPhase('monitor')">
+          🔍 Оновити моніторинг
+        </button>
+        <button class="btn-warn" onclick="triggerPhase('draft')">
+          📋 Сформувати чернетку (Т-3)
+        </button>
+        <button class="btn-info" onclick="triggerPhase('reconcile')">
+          🔄 Звірити запізнілі (Т-1)
+        </button>
+        <button class="btn-success" onclick="triggerPhase('final')">
+          🚀 Фінальна здача (Дедлайн)
+        </button>
+        <button class="btn-secondary" onclick="triggerPhase('auto')">
+          ⏱️ Авто-розклад (Daily)
+        </button>
+      </div>
+    </div>
+
+    <!-- Realtime Log Terminal -->
+    <div class="card" style="padding: 16px;">
+      <div class="log-header">
+        <h3>Журнал виконання операцій (Live Output):</h3>
+        <button class="clear-btn" onclick="clearLogs()">Очистити</button>
+      </div>
+      <div class="log-container" id="logBox">Ініціалізація інтерфейсу управління кафедрою...
+Підключено до Fastify сервера.
+Натисніть будь-яку дію вище для запуску.</div>
+    </div>
+  </div>
+
+  <script>
+    function logMessage(msg) {
+      const box = document.getElementById('logBox');
+      const time = new Date().toLocaleTimeString();
+      box.textContent += `\n[${time}] ${msg}`;
+      box.scrollTop = box.scrollHeight;
+    }
+
+    function clearLogs() {
+      document.getElementById('logBox').textContent = 'Лог очищено.';
+    }
+
+    async function fetchStatus() {
+      try {
+        logMessage('Запит актуального статусу системи...');
+        const res = await fetch('/api/status');
+        const data = await res.json();
+
+        if (data.ok) {
+          document.getElementById('statAssignmentName').textContent = data.assignmentTitle || 'Інформація про науково-дослідну роботу';
+          document.getElementById('statDeadline').textContent = data.deadlineFormatted || '16.11.2026';
+          document.getElementById('statDaysRemaining').textContent = data.daysRemaining !== null ? data.daysRemaining + ' дн.' : 'N/A';
+          document.getElementById('statSubmissions').textContent = `${data.submittedCount || 0} / ${data.totalTeachers || 0}`;
+
+          if (data.aiSummary) {
+            document.getElementById('aiSummaryBlock').style.display = 'block';
+            document.getElementById('aiSummaryText').textContent = data.aiSummary;
+          }
+
+          logMessage(`Статус оновлено: ${data.submittedCount || 0}/${data.totalTeachers || 0} викладачів здали звіт. Днів: ${data.daysRemaining}.`);
+        } else {
+          logMessage(`Попередження: ${data.message || 'Статус не отримано'}`);
+        }
+      } catch (err) {
+        logMessage(`Помилка підключення до сервера: ${err.message}`);
+      }
+    }
+
+    async function triggerPhase(phase) {
+      const isDryRun = document.getElementById('dryRunToggle').checked;
+      const phaseLabels = {
+        monitor: 'Моніторинг',
+        draft: 'Формування чернетки (Т-3)',
+        reconcile: 'Звірка та перерахунок (Т-1)',
+        final: 'Фінальна здача на пошту наукового відділу',
+        auto: 'Автоматичний розклад за дедлайном'
+      };
+
+      const label = phaseLabels[phase] || phase;
+      logMessage(`⏳ Запуск дії [${label}] (Режим Dry-Run: ${isDryRun ? 'ТАК' : 'НІ'})...`);
+
+      try {
+        const res = await fetch(`/api/trigger/${phase}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ dryRun: isDryRun })
+        });
+
+        const data = await res.json();
+        if (data.ok) {
+          logMessage(`✅ Дія [${label}] завершена успішно: ${data.message}`);
+          if (data.aiSummary) {
+            document.getElementById('aiSummaryBlock').style.display = 'block';
+            document.getElementById('aiSummaryText').textContent = data.aiSummary;
+          }
+          if (data.sheetUrl) {
+            logMessage(`📄 Посилання на Google Sheet: ${data.sheetUrl}`);
+          }
+          fetchStatus();
+        } else {
+          logMessage(`❌ Дія завершилась із помилкою: ${data.error || data.message}`);
+        }
+      } catch (err) {
+        logMessage(`❌ Мережева помилка під час виконання: ${err.message}`);
+      }
+    }
+
+    // Auto-fetch status on initial load
+    window.addEventListener('DOMContentLoaded', () => {
+      fetchStatus();
+    });
+  </script>
+
+</body>
+</html>

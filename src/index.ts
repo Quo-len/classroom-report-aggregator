@@ -5,6 +5,7 @@ import { DriveService, DownloadedAsset } from './services/drive.service';
 import { NotifyService } from './services/notify.service';
 import { HealthService } from './services/health.service';
 import { Aggregator } from './core/aggregator';
+import { createServer } from './server';
 import { env } from './config/env';
 
 /**
@@ -33,7 +34,7 @@ async function runAuthInit(): Promise<void> {
  * Action 1: Monitoring Phase
  * Polls Google Classroom for assignment, extracts metadata and deadline
  */
-async function runMonitoringPhase(): Promise<{ assignment: CourseAssignment; submissions: StudentSubmissionItem[] } | null> {
+export async function runMonitoringPhase(): Promise<{ assignment: CourseAssignment; submissions: StudentSubmissionItem[] } | null> {
   logInfo(`=== STAGE 1: MONITORING PHASE ===`);
   const assignment = await ClassroomService.getTargetAssignment();
 
@@ -63,7 +64,7 @@ async function runMonitoringPhase(): Promise<{ assignment: CourseAssignment; sub
  * - Send email reminder via Gmail to teachers who have not submitted (warning: 48h left)
  * - Send direct message via Telegram and email to Head of Dept listing missing teachers
  */
-async function runDraftPhase(
+export async function runDraftPhase(
   existingAssignment?: CourseAssignment,
   existingSubmissions?: StudentSubmissionItem[]
 ): Promise<string | null> {
@@ -104,7 +105,7 @@ async function runDraftPhase(
  * - Check for late submissions
  * - Recalculate all sums and update master Google Sheet
  */
-async function runReconcilePhase(
+export async function runReconcilePhase(
   existingAssignment?: CourseAssignment,
   existingSubmissions?: StudentSubmissionItem[]
 ): Promise<string | null> {
@@ -146,7 +147,7 @@ ${aggregatedData.aiSummary ? `\n\n<b>🤖 ШІ-Резюме:</b>\n<i>${aggregate
  * - Email final link + JPEGs to Scientific Dept and Head of Dept
  * - Notify Head of Dept on Telegram
  */
-async function runFinalPhase(
+export async function runFinalPhase(
   existingAssignment?: CourseAssignment,
   existingSubmissions?: StudentSubmissionItem[]
 ): Promise<string | null> {
@@ -189,7 +190,7 @@ async function runFinalPhase(
  * Automated Daily Workflow:
  * Evaluates current date vs assignment deadline and executes appropriate stage
  */
-async function runAutoDailyWorkflow(): Promise<void> {
+export async function runAutoDailyWorkflow(): Promise<void> {
   logInfo('🚀 Starting Automated Daily Workflow...');
   const result = await runMonitoringPhase();
   if (!result) return;
@@ -230,6 +231,7 @@ Usage:
   node dist/index.js [options]
 
 Options:
+  --serve         Start Fastify HTTP server with interactive web UI (public/index.html)
   --monitor       Poll Google Classroom, print assignment metadata & current submission stats
   --draft         Force execution of T-minus 3 Days workflow (Draft Sheet + Warn Missing Teachers + Telegram)
   --reconcile     Force execution of T-minus 1 Day workflow (Reconcile submissions & recalculate sums)
@@ -263,6 +265,22 @@ async function main() {
   const args = rawArgs.filter((a) => a !== '--dry-run' && a !== '-d');
 
   try {
+    if (args.includes('--serve') || args.includes('-s')) {
+      const port = parseInt(process.env.PORT || '3000', 10);
+      const server = await createServer();
+      server.listen({ port, host: '0.0.0.0' }, (err, address) => {
+        if (err) {
+          logError('Failed to start server:', err);
+          process.exit(1);
+        }
+        console.log(`\n============================================================`);
+        console.log(`🚀 Сервер АІ-Секретаря запущено: ${address}`);
+        console.log(`🌐 Веб-панель керування: http://localhost:${port}`);
+        console.log(`============================================================\n`);
+      });
+      return; // Keep running
+    }
+
     if (args.includes('--healthcheck') || args.includes('--check')) {
       const ok = await HealthService.runDiagnostics();
       process.exit(ok ? 0 : 1);
@@ -292,5 +310,7 @@ async function main() {
   }
 }
 
-// Run CLI
-main();
+// Run CLI only when executed directly
+if (require.main === module) {
+  main();
+}
