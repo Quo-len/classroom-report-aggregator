@@ -112,10 +112,22 @@ export class AuthService {
     });
 
     return new Promise((resolve, reject) => {
-      rl.question('Enter authorization code: ', async (code) => {
+      rl.question('Enter authorization code (or paste the entire redirect URL): ', async (rawInput) => {
         rl.close();
         try {
-          const { tokens } = await oauth2Client.getToken(code.trim());
+          let code = rawInput.trim();
+          if (code.includes('code=')) {
+            try {
+              const parsedUrl = new URL(code.startsWith('http') ? code : `http://${code}`);
+              const extracted = parsedUrl.searchParams.get('code');
+              if (extracted) {
+                code = extracted;
+                console.log('🔍 Extracted authorization code from redirect URL.');
+              }
+            } catch (_) {}
+          }
+
+          const { tokens } = await oauth2Client.getToken(code);
           oauth2Client.setCredentials(tokens);
           fs.writeFileSync(env.tokenPath, JSON.stringify(tokens, null, 2), 'utf8');
           console.log(`✅ Authorization successful! Tokens saved to: ${env.tokenPath}`);
