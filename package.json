@@ -9,6 +9,7 @@
     "dev": "tsx src/index.ts",
     "test": "tsx test/test-aggregator.ts",
     "check": "tsx src/index.ts --healthcheck",
+    "dry-run": "tsx src/index.ts --auto --dry-run",
     "auth:init": "tsx src/index.ts --auth-init"
   },
   "keywords": [

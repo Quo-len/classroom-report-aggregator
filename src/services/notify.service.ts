@@ -12,6 +12,7 @@ export interface EmailOptions {
 }
 
 export class NotifyService {
+  public static dryRun: boolean = false;
   private static gmailApi: gmail_v1.Gmail | null = null;
   private static bot: Telegraf | null = null;
 
@@ -90,11 +91,19 @@ export class NotifyService {
    * Sends an email via Google Gmail API
    */
   public static async sendEmail(options: EmailOptions): Promise<boolean> {
+    const recipients = Array.isArray(options.to) ? options.to.join(', ') : options.to;
+
+    if (this.dryRun) {
+      console.log(`🧪 [DRY-RUN] Simulating email delivery to: [${recipients}]`);
+      console.log(`   Subject: "${options.subject}"`);
+      console.log(`   Attachments: ${options.attachments?.length || 0} files`);
+      return true;
+    }
+
     try {
       const gmail = await this.getGmail();
       const raw = this.buildMimeMessage(options);
 
-      const recipients = Array.isArray(options.to) ? options.to.join(', ') : options.to;
       console.log(`📧 Sending email via Gmail to: [${recipients}], Subject: "${options.subject}"...`);
 
       await gmail.users.messages.send({
@@ -116,6 +125,13 @@ export class NotifyService {
    * Sends a message via Telegram to the specified or default chat ID
    */
   public static async sendTelegramMessage(text: string, chatId: string = env.HEAD_OF_DEPT_CHAT_ID): Promise<boolean> {
+    if (this.dryRun) {
+      console.log(`🧪 [DRY-RUN] Simulating Telegram notification to chat [${chatId}]`);
+      const preview = text.replace(/<[^>]*>/g, '').trim().split('\n')[0] || '';
+      console.log(`   Preview: "${preview}"`);
+      return true;
+    }
+
     try {
       console.log(`📱 Sending Telegram notification to chat [${chatId}]...`);
       const bot = this.getTelegramBot();

@@ -232,6 +232,7 @@ Options:
   --draft         Force execution of T-minus 3 Days workflow (Draft Sheet + Warn Missing Teachers + Telegram)
   --reconcile     Force execution of T-minus 1 Day workflow (Reconcile submissions & recalculate sums)
   --final         Force execution of Final Delivery (Final Sheet + JPEGs + Email to Sci Dept & Head)
+  --dry-run, -d   Simulate workflows without sending real emails or Telegram messages
   --healthcheck   Run diagnostic health checks on Google APIs & Telegram bot connectivity
   --auto          (Default) Automatically detect timeline relative to deadline and run corresponding phase
   --auth-init     Initiate interactive Google OAuth2 consent and generate token.json
@@ -243,12 +244,21 @@ Options:
  * Main Entry Point
  */
 async function main() {
-  const args = process.argv.slice(2);
+  const rawArgs = process.argv.slice(2);
 
-  if (args.includes('--help') || args.includes('-h')) {
+  if (rawArgs.includes('--help') || rawArgs.includes('-h')) {
     printHelp();
     process.exit(0);
   }
+
+  const isDryRun = rawArgs.includes('--dry-run') || rawArgs.includes('-d');
+  if (isDryRun) {
+    NotifyService.dryRun = true;
+    console.log('🧪 [DRY-RUN MODE ACTIVATED] All outbound emails and Telegram alerts are simulated.\n');
+  }
+
+  // Filter out secondary modifier flags
+  const args = rawArgs.filter((a) => a !== '--dry-run' && a !== '-d');
 
   try {
     if (args.includes('--healthcheck') || args.includes('--check')) {
