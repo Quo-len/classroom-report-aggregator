@@ -49,19 +49,9 @@ export async function createServer(): Promise<FastifyInstance> {
       }
 
       if (!assignment) {
-        // Return default/mock status info for UI visualization
         return {
-          ok: true,
-          mode: 'simulated/offline',
-          assignmentTitle: env.ASSIGNMENT_NAME,
-          creationDateFormatted: '10.11.2026',
-          deadlineFormatted: '16.11.2026 23:59',
-          daysRemaining: 3,
-          submittedCount: 9,
-          totalTeachers: 11,
-          missingTeachers: ['Доц. Петренко П. П.', 'Проф. Ковальчук В. М.'],
-          aiSummary:
-            'Станом на Т-3 подано 9 з 11 звітів. Зафіксовано 14 статей Scopus, 3 монографії, 2 патенти. Очікуються 2 звіти для фіналізації.',
+          ok: false,
+          error: `Завдання "${env.ASSIGNMENT_NAME}" не знайдено в Google Classroom курсу ${env.CLASSROOM_COURSE_ID}.`,
         };
       }
 
@@ -71,13 +61,26 @@ export async function createServer(): Promise<FastifyInstance> {
       return {
         ok: true,
         mode: 'live',
+        assignmentId: assignment.id,
         assignmentTitle: assignment.title,
+        assignmentUrl: assignment.raw?.alternateLink || `https://classroom.google.com/c/${env.CLASSROOM_COURSE_ID}`,
+        courseId: env.CLASSROOM_COURSE_ID,
+        courseUrl: `https://classroom.google.com/c/${env.CLASSROOM_COURSE_ID}`,
         creationDateFormatted: assignment.creationDateFormatted,
         deadlineFormatted: assignment.deadlineFormatted,
         daysRemaining: assignment.daysRemaining,
         submittedCount,
         totalTeachers: submissions.length,
         missingTeachers: missingList,
+        teachers: submissions.map((s) => ({
+          name: s.studentName,
+          email: s.studentEmail,
+          hasSubmitted: s.hasSubmitted,
+          attachments: s.attachments.map((a) => a.title),
+        })),
+        driveFolderId: env.MASTER_OUTPUT_FOLDER_ID,
+        driveFolderUrl: `https://drive.google.com/drive/folders/${env.MASTER_OUTPUT_FOLDER_ID}`,
+        telegramBot: '@a_birb_bot',
       };
     } catch (err: any) {
       return { ok: false, error: err.message };
@@ -97,78 +100,79 @@ export async function createServer(): Promise<FastifyInstance> {
 
     try {
       if (phase === 'monitor') {
-        let submitted = 9;
-        let total = 11;
         try {
           const res = await runMonitoringPhase();
-          if (res) {
-            submitted = res.submissions.filter((s) => s.hasSubmitted).length;
-            total = res.submissions.length;
+          if (!res) {
+            return reply.code(404).send({
+              ok: false,
+              error: `Завдання "${env.ASSIGNMENT_NAME}" не знайдено в Google Classroom.`,
+            });
           }
+          const submitted = res.submissions.filter((s) => s.hasSubmitted).length;
+          const total = res.submissions.length;
+          return {
+            ok: true,
+            message: `Моніторинг успішно виконано (Режим: ${isDryRun ? 'Dry-Run' : 'Live'}). Зафіксовано ${submitted} здач із ${total} викладачів.`,
+          };
         } catch (e: any) {
-          server.log.warn(`Live Classroom unavailable, returning simulated monitoring: ${e.message}`);
+          server.log.error(`Monitoring failed: ${e.message}`);
+          return reply.code(502).send({ ok: false, error: `Моніторинг не виконано: ${e.message}` });
         }
-        return {
-          ok: true,
-          message: `Моніторинг успішно виконано (Режим: ${isDryRun ? 'Dry-Run Симуляція' : 'Live'}). Зафіксовано ${submitted} здач із ${total} викладачів.`,
-        };
       }
 
       if (phase === 'draft') {
-        let sheetUrl = 'https://docs.google.com/spreadsheets/d/simulated_preliminary_sheet';
         try {
-          const resUrl = await runDraftPhase();
-          if (resUrl) sheetUrl = resUrl;
+          const sheetUrl = await runDraftPhase();
+          return {
+            ok: true,
+            message: `Фазу Т-3 (попередній звіт) успішно виконано. Боржників попереджено, завідувача кафедри сповіщено.`,
+            sheetUrl,
+          };
         } catch (e: any) {
-          server.log.warn(`Live Google API unavailable, simulated draft generated: ${e.message}`);
+          server.log.error(`Draft phase failed: ${e.message}`);
+          return reply.code(502).send({ ok: false, error: `Чернетку не сформовано: ${e.message}` });
         }
-        return {
-          ok: true,
-          message: `Фазу Т-3 (попередній звіт) успішно виконано. Боржників попереджено, завідувача кафедри сповіщено.`,
-          sheetUrl,
-        };
       }
 
       if (phase === 'reconcile') {
-        let sheetUrl = 'https://docs.google.com/spreadsheets/d/simulated_reconciled_sheet';
         try {
-          const resUrl = await runReconcilePhase();
-          if (resUrl) sheetUrl = resUrl;
+          const sheetUrl = await runReconcilePhase();
+          return {
+            ok: true,
+            message: `Фазу Т-1 (звірка та перерахунок) успішно виконано. Таблицю оновлено.`,
+            sheetUrl,
+          };
         } catch (e: any) {
-          server.log.warn(`Live Google API unavailable, simulated reconcile generated: ${e.message}`);
+          server.log.error(`Reconcile phase failed: ${e.message}`);
+          return reply.code(502).send({ ok: false, error: `Звірку не виконано: ${e.message}` });
         }
-        return {
-          ok: true,
-          message: `Фазу Т-1 (звірка та перерахунок) успішно виконано. Таблицю оновлено.`,
-          sheetUrl,
-        };
       }
 
       if (phase === 'final') {
-        let sheetUrl = 'https://docs.google.com/spreadsheets/d/simulated_final_master_sheet';
         try {
-          const resUrl = await runFinalPhase();
-          if (resUrl) sheetUrl = resUrl;
+          const sheetUrl = await runFinalPhase();
+          return {
+            ok: true,
+            message: `Фінальну здачу виконано: підсумковий Google Sheet та JPEG-додатки надіслано до наукового відділу (${env.SCI_DEPT_EMAIL}).`,
+            sheetUrl,
+          };
         } catch (e: any) {
-          server.log.warn(`Live Google API unavailable, simulated final delivery generated: ${e.message}`);
+          server.log.error(`Final phase failed: ${e.message}`);
+          return reply.code(502).send({ ok: false, error: `Фінальну здачу не виконано: ${e.message}` });
         }
-        return {
-          ok: true,
-          message: `Фінальну здачу виконано: підсумковий Google Sheet та JPEG-додатки надіслано до наукового відділу (${env.SCI_DEPT_EMAIL}).`,
-          sheetUrl,
-        };
       }
 
       if (phase === 'auto') {
         try {
           await runAutoDailyWorkflow();
+          return {
+            ok: true,
+            message: `Автоматичний щоденний розклад перевірив статус дедлайну та виконав відповідні дії.`,
+          };
         } catch (e: any) {
-          server.log.warn(`Live Google API unavailable, simulated auto workflow executed: ${e.message}`);
+          server.log.error(`Automatic workflow failed: ${e.message}`);
+          return reply.code(502).send({ ok: false, error: `Автоматичний розклад не виконано: ${e.message}` });
         }
-        return {
-          ok: true,
-          message: `Автоматичний щоденний розклад перевірив статус дедлайну та виконав відповідні дії.`,
-        };
       }
 
       return reply.code(400).send({ ok: false, error: `Невідома фаза: ${phase}` });

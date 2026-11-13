@@ -41,7 +41,7 @@
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 24px;
+      margin-bottom: 20px;
       padding-bottom: 16px;
       border-bottom: 1px solid var(--border);
     }
@@ -70,6 +70,36 @@
 
     .badge-online { background-color: #dcfce7; color: #15803d; }
     .badge-offline { background-color: #fee2e2; color: #b91c1c; }
+
+    /* Quick Links Bar */
+    .links-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    .link-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 14px;
+      background: #ffffff;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: #1e293b;
+      font-size: 13px;
+      font-weight: 600;
+      text-decoration: none;
+      transition: all 0.15s ease;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+    }
+
+    .link-pill:hover {
+      border-color: var(--primary);
+      color: var(--primary);
+      transform: translateY(-1px);
+    }
 
     .offline-alert {
       display: none;
@@ -120,9 +150,75 @@
     }
 
     .stat-value {
-      font-size: 22px;
+      font-size: 20px;
       font-weight: 700;
       color: var(--text);
+    }
+
+    .stat-sub {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    /* Table styles */
+    .table-container {
+      margin-bottom: 24px;
+    }
+
+    .table-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .table-header h2 {
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+      text-align: left;
+    }
+
+    th {
+      background: #f1f5f9;
+      padding: 10px 12px;
+      font-weight: 600;
+      color: #475569;
+      border-bottom: 1px solid var(--border);
+    }
+
+    td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      color: #1e293b;
+    }
+
+    tr:hover td {
+      background: #f8fafc;
+    }
+
+    .status-badge {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .status-submitted { background: #dcfce7; color: #166534; }
+    .status-pending { background: #fef3c7; color: #92400e; }
+
+    .empty-state {
+      text-align: center;
+      padding: 24px;
+      color: var(--text-muted);
+      font-size: 14px;
     }
 
     .controls-card {
@@ -247,13 +343,26 @@
   <div class="container">
     <header>
       <div class="header-title">
-        <h1>🎓 АІ-Секретар Кафедри <span class="badge badge-online" id="serverStatusBadge">Перевірка зв'язку...</span></h1>
+        <h1>🎓 АІ-Секретар Кафедри <span class="badge badge-online" id="serverStatusBadge">Підключення...</span></h1>
         <p>Автоматизація моніторингу Google Classroom, генерації зведених звітів, розсилки та ШІ-аналізу</p>
       </div>
       <div>
         <button class="btn-secondary" onclick="fetchStatus()">🔄 Оновити дані</button>
       </div>
     </header>
+
+    <!-- Quick Links Bar -->
+    <div class="links-bar" id="linksBar">
+      <a href="#" target="_blank" class="link-pill" id="linkClassroom">
+        🎓 Завдання в Google Classroom
+      </a>
+      <a href="#" target="_blank" class="link-pill" id="linkDrive">
+        📁 Папка звітів на Google Drive
+      </a>
+      <a href="https://t.me/a_birb_bot" target="_blank" class="link-pill" id="linkTelegram">
+        🤖 Telegram-бот (@a_birb_bot)
+      </a>
+    </div>
 
     <!-- Offline Alert Banner (shown when opened as file:// without server) -->
     <div class="offline-alert" id="offlineAlert">
@@ -263,30 +372,60 @@
       <br>👉 <strong>Або:</strong> натискання кнопок нижче автоматично <strong>скопіює готову CLI-команду</strong> в буфер обміну для терміналу!
     </div>
 
-    <!-- Stats Overview -->
+    <!-- Stats Overview (Real Live Data) -->
     <div class="grid-stats">
       <div class="card">
         <div class="stat-label">Завдання в Classroom</div>
-        <div class="stat-value" id="statAssignmentName">Інформація про науково-дослідну роботу</div>
+        <div class="stat-value" id="statAssignmentName">Завантаження...</div>
+        <div class="stat-sub" id="statCreatedDate">Створено: --</div>
       </div>
       <div class="card">
         <div class="stat-label">Дедлайн здачі</div>
-        <div class="stat-value" id="statDeadline">16.11.2026 23:59</div>
+        <div class="stat-value" id="statDeadline">--</div>
+        <div class="stat-sub">Кінцевий термін подання</div>
       </div>
       <div class="card">
         <div class="stat-label">Днів залишилось</div>
-        <div class="stat-value" id="statDaysRemaining">3 дн.</div>
+        <div class="stat-value" id="statDaysRemaining">--</div>
+        <div class="stat-sub" id="statPhaseHint">Фаза визначається автоматично</div>
       </div>
       <div class="card">
-        <div class="stat-label">Здано звітів</div>
-        <div class="stat-value" id="statSubmissions">9 / 11</div>
+        <div class="stat-label">Здано звітів викладачів</div>
+        <div class="stat-value" id="statSubmissions">--</div>
+        <div class="stat-sub" id="statSubmissionsSub">Поточний прогрес збору</div>
       </div>
     </div>
 
-    <!-- AI Executive Summary Banner -->
-    <div class="card ai-summary-card" id="aiSummaryBlock">
+    <!-- Real Enrolled Teachers Table -->
+    <div class="card table-container">
+      <div class="table-header">
+        <h2>👥 Стан подання звітів викладачами курсу</h2>
+        <span class="stat-label" id="teachersCountLabel">Всього викладачів: 0</span>
+      </div>
+      <div id="teachersTableWrap">
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 40px;">№</th>
+              <th>ПІБ Викладача</th>
+              <th>Email</th>
+              <th>Статус</th>
+              <th>Прикріплені файли</th>
+            </tr>
+          </thead>
+          <tbody id="teachersTableBody">
+            <tr>
+              <td colspan="5" class="empty-state">Завантаження списку викладачів з Google Classroom...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- AI Executive Summary Banner (Appears when generated) -->
+    <div class="card ai-summary-card" id="aiSummaryBlock" style="display: none;">
       <h3>🤖 Аналітичне резюме кафедри (Groq AI):</h3>
-      <p id="aiSummaryText">Станом на Т-3 подано 9 з 11 звітів. Зафіксовано 14 статей Scopus, 3 монографії, 2 патенти. Очікуються 2 звіти для фіналізації.</p>
+      <p id="aiSummaryText"></p>
     </div>
 
     <!-- Actions & Triggers -->
@@ -361,34 +500,65 @@
         badge.className = 'badge badge-offline';
         alertBox.style.display = 'block';
         logMessage('ℹ️ Сторінку відкрито як локальний файл без сервера.');
-        logMessage('👉 Для активних кліків запустіть файл: 🚀_Запустити_Панель_Керування.bat');
+        logMessage('👉 Для запуску повного режиму двічі клацніть файл: 🚀_Запустити_Панель_Керування.bat');
         return;
       }
 
       try {
-        logMessage('Запит актуального статусу від сервера...');
+        logMessage('Запит актуального стану з Google Classroom...');
         const res = await fetch('/api/status');
         const data = await res.json();
 
-        if (data.ok) {
+        if (res.ok && data.ok) {
           isServerRunning = true;
-          badge.textContent = 'Сервер активний';
+          badge.textContent = 'Сервер активний (Live API)';
           badge.className = 'badge badge-online';
           alertBox.style.display = 'none';
 
-          document.getElementById('statAssignmentName').textContent = data.assignmentTitle || 'Інформація про науково-дослідну роботу';
-          document.getElementById('statDeadline').textContent = data.deadlineFormatted || '16.11.2026';
-          document.getElementById('statDaysRemaining').textContent = data.daysRemaining !== null ? data.daysRemaining + ' дн.' : 'N/A';
-          document.getElementById('statSubmissions').textContent = `${data.submittedCount || 0} / ${data.totalTeachers || 0}`;
+          // 1. Stats Cards
+          document.getElementById('statAssignmentName').textContent = data.assignmentTitle || 'Не знайдено';
+          document.getElementById('statCreatedDate').textContent = data.creationDateFormatted ? `Створено: ${data.creationDateFormatted}` : '';
+          document.getElementById('statDeadline').textContent = data.deadlineFormatted || 'Не встановлено';
 
+          const days = data.daysRemaining;
+          document.getElementById('statDaysRemaining').textContent = (days !== null && days !== undefined) ? `${days} дн.` : 'Н/Д';
+
+          let phaseHint = 'Поточний статус';
+          if (days <= 0) phaseHint = 'Дедлайн настав (Фінальна здача)';
+          else if (days === 1) phaseHint = 'Т-1 День (Звірення)';
+          else if (days <= 3) phaseHint = 'Т-3 Дні (Чернетка та попередження)';
+          else phaseHint = 'Активний моніторинг (більше 3 днів)';
+          document.getElementById('statPhaseHint').textContent = phaseHint;
+
+          document.getElementById('statSubmissions').textContent = `${data.submittedCount ?? 0} з ${data.totalTeachers ?? 0}`;
+          document.getElementById('statSubmissionsSub').textContent = (data.totalTeachers === 0)
+            ? 'Викладачів ще не додано до курсу'
+            : `Очікується ще: ${data.totalTeachers - data.submittedCount}`;
+
+          // 2. Links Bar
+          if (data.assignmentUrl) {
+            document.getElementById('linkClassroom').href = data.assignmentUrl;
+          }
+          if (data.driveFolderUrl) {
+            document.getElementById('linkDrive').href = data.driveFolderUrl;
+          }
+
+          // 3. Teachers Table
+          renderTeachersTable(data.teachers || [], data.courseUrl);
+
+          // 4. AI Summary
           if (data.aiSummary) {
             document.getElementById('aiSummaryBlock').style.display = 'block';
             document.getElementById('aiSummaryText').textContent = data.aiSummary;
           }
 
-          logMessage(`Статус оновлено: ${data.submittedCount || 0}/${data.totalTeachers || 0} викладачів здали звіт. Днів: ${data.daysRemaining}.`);
+          logMessage(`✅ Реальні дані завантажено: знайдено завдання "${data.assignmentTitle}", дедлайн: ${data.deadlineFormatted}, викладачів у курсі: ${data.totalTeachers}.`);
         } else {
-          logMessage(`Попередження: ${data.message || 'Статус не отримано'}`);
+          isServerRunning = true;
+          badge.textContent = 'Помилка даних';
+          badge.className = 'badge badge-offline';
+          alertBox.style.display = 'none';
+          logMessage(`⚠️ Помилка отримання даних: ${data.error || data.message || 'Невідома помилка'}`);
         }
       } catch (err) {
         isServerRunning = false;
@@ -397,6 +567,56 @@
         alertBox.style.display = 'block';
         logMessage(`⚠️ Сервер не відповідає (${err.message}). Увімкнено допоміжний CLI-режим.`);
       }
+    }
+
+    function renderTeachersTable(teachers, courseUrl) {
+      const tbody = document.getElementById('teachersTableBody');
+      const countLabel = document.getElementById('teachersCountLabel');
+      countLabel.textContent = `Всього викладачів: ${teachers.length}`;
+
+      if (!teachers || teachers.length === 0) {
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="5" class="empty-state">
+              ⚠️ <strong>У курсі Google Classroom наразі немає викладачів у ролі «Студент».</strong><br>
+              Щоб система бачила звіти, надішліть викладачам посилання на курс або приєднайте тестовий акаунт:<br>
+              <a href="${courseUrl || '#'}" target="_blank" style="color: var(--primary); font-weight: 600; text-decoration: underline; display: inline-block; margin-top: 8px;">
+                Відкрити курс у Google Classroom для запрошення викладачів
+              </a>
+            </td>
+          </tr>
+        `;
+        return;
+      }
+
+      tbody.innerHTML = teachers.map((t, index) => {
+        const statusHtml = t.hasSubmitted
+          ? '<span class="status-badge status-submitted">✅ Здав</span>'
+          : '<span class="status-badge status-pending">⏳ Очікується</span>';
+
+        const filesHtml = (t.attachments && t.attachments.length > 0)
+          ? t.attachments.map(f => `📄 ${escapeHtml(f)}`).join('<br>')
+          : '<span style="color: #94a3b8;">Немає файлів</span>';
+
+        return `
+          <tr>
+            <td>${index + 1}</td>
+            <td><strong>${escapeHtml(t.name || 'Без імені')}</strong></td>
+            <td>${escapeHtml(t.email || '—')}</td>
+            <td>${statusHtml}</td>
+            <td>${filesHtml}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function escapeHtml(text) {
+      if (!text) return '';
+      return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
     }
 
     async function triggerPhase(phase) {
