@@ -19,6 +19,16 @@ export async function createServer(): Promise<FastifyInstance> {
     logger: true,
   });
 
+  // Enable CORS so HTML opened from file:// can also fetch API
+  server.addHook('onRequest', async (req, reply) => {
+    reply.header('Access-Control-Allow-Origin', '*');
+    reply.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    reply.header('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') {
+      return reply.code(200).send();
+    }
+  });
+
   const publicPath = path.resolve('public');
   if (fs.existsSync(publicPath)) {
     server.register(fastifyStatic, {
