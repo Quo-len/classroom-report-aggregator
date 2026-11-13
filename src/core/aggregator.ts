@@ -1,6 +1,8 @@
 import { SheetsService } from '../services/sheets.service';
 import { DriveService } from '../services/drive.service';
+import { DocParserService } from '../services/doc-parser.service';
 import { CourseAssignment, StudentSubmissionItem } from '../services/classroom.service';
+import { OFFICIAL_INDICATORS, OFFICIAL_SECTIONS } from '../config/official-template';
 import { env } from '../config/env';
 
 export interface ParsedMetric {
@@ -36,43 +38,12 @@ export class Aggregator {
    * If a cell contains a dash ("-") or the string "інформація відсутня", it must be parsed and calculated as 0.
    */
   public static parseCellNumber(val: any): number {
-    if (val === null || val === undefined) {
-      return 0;
-    }
-
-    if (typeof val === 'number') {
-      return isNaN(val) ? 0 : val;
-    }
-
-    const str = String(val).trim();
-
-    // Check critical rule: dash or "інформація відсутня"
-    if (
-      str === '-' ||
-      str === '–' ||
-      str === '—' ||
-      /^інформація\s*відсутня$/i.test(str) ||
-      str.toLowerCase().includes('інформація відсутня')
-    ) {
-      return 0;
-    }
-
-    // Clean formatting (spaces, non-breaking spaces, commas for decimals)
-    const cleaned = str
-      .replace(/[\s\u00A0]/g, '')
-      .replace(/,/g, '.');
-
-    // Strict regex for numeric values (integer or decimal)
-    if (/^-?\d+(\.\d+)?$/.test(cleaned)) {
-      const parsed = parseFloat(cleaned);
-      return isNaN(parsed) ? 0 : parsed;
-    }
-
-    return 0;
+    return DocParserService.parseNumber(val);
   }
 
   /**
-   * Parses individual teacher submission files (Google Sheets / Google Docs)
+   * Parses individual teacher submission files:
+   * Supports Google Spreadsheets, Google Docs, native Word (.docx, e.g. Додаток_*.docx), and native Excel (.xlsx)
    */
   public static async parseTeacherSubmission(submission: StudentSubmissionItem): Promise<TeacherReportData> {
     const reportData: TeacherReportData = {
@@ -97,20 +68,41 @@ export class Aggregator {
         const mimeType = meta?.mimeType || '';
         const title = meta?.name || attachment.title || '';
 
-        // If it's a Google Spreadsheet
-        if (mimeType.includes('spreadsheet') || title.endsWith('.xlsx') || title.endsWith('.csv')) {
-          console.log(`📑 Parsing teacher spreadsheet [${title}] for ${submission.studentName}...`);
-          const rows = await SheetsService.readSheetRows(attachment.id);
+        // 1. If it's a native Word document (.docx / Додаток_*.docx)
+        if (title.endsWith('.docx') || mimeType.includes('wordprocessingml')) {
+          console.log(`📝 Downloading & parsing native Word document [${title}] for ${submission.studentName}...`);
+          const buffer = await DriveService.downloadFileBuffer(attachment.id, title);
+          if (buffer) {
+            const extracted = DocParserService.extractMetricsFromDocx(buffer, title);
+            for (const [ind, val] of extracted.entries()) {
+              const current = reportData.metrics.get(ind) || 0;
+              reportData.metrics.set(ind, current + val);
+            }
+          }
+        }
+        // 2. If it's a Google Spreadsheet
+        else if (mimeType.includes('spreadsheet') || title.endsWith('.xlsx') || title.endsWith('.csv')) {
+          console.log(`📑 Parsing spreadsheet [${title}] for ${submission.studentName}...`);
+          let rows: any[][] = [];
+
+          // Try Google Sheets API first (for Google Spreadsheets or auto-converted files)
+          try {
+            rows = await SheetsService.readSheetRows(attachment.id);
+          } catch (e) {
+            // If direct Sheets API fails on binary .xlsx, download and parse buffer
+            const buffer = await DriveService.downloadFileBuffer(attachment.id, title);
+            if (buffer) {
+              rows = DocParserService.parseXlsxBuffer(buffer);
+            }
+          }
 
           for (const row of rows) {
             if (!row || row.length === 0) continue;
-            // Expected format: Column 0: Indicator name / question, Column 1 or 2: Count / Value
             const indicatorName = String(row[0] || '').trim();
             if (!indicatorName || indicatorName.toLowerCase().startsWith('показник') || indicatorName.toLowerCase().startsWith('№')) {
-              continue; // skip table header rows
+              continue;
             }
 
-            // Find first numeric or dash column
             let metricVal = 0;
             let foundValue = false;
 
@@ -128,10 +120,10 @@ export class Aggregator {
               reportData.metrics.set(indicatorName, currentVal + metricVal);
             }
           }
-        } 
-        // If it's a Google Doc
+        }
+        // 3. If it's a Google Doc
         else if (mimeType.includes('document')) {
-          console.log(`📄 Parsing teacher document [${title}] for ${submission.studentName}...`);
+          console.log(`📄 Parsing teacher Google Doc [${title}] for ${submission.studentName}...`);
           const docText = await DriveService.exportDocAsText(attachment.id);
           if (docText) {
             const lines = docText.split(/\r?\n/);
@@ -139,7 +131,6 @@ export class Aggregator {
               const trimmed = line.trim();
               if (!trimmed) continue;
 
-              // Match lines like: "1. Кількість опублікованих статей: 3" or "Статті Scopus: -"
               const delimiterMatch = trimmed.match(/^([^:\-\t–]+)[:\t–\-]\s*(.+)$/);
               if (delimiterMatch) {
                 const indicator = delimiterMatch[1].trim();
@@ -153,7 +144,6 @@ export class Aggregator {
         }
       } catch (err) {
         console.error(`⚠️ Failed to parse attachment [${attachment.title}] for ${submission.studentName}:`, err);
-        // Continue processing remaining attachments/teachers, do not crash
       }
     }
 
@@ -162,41 +152,38 @@ export class Aggregator {
 
   /**
    * Main aggregation pipeline:
-   * 1. Aggregate dynamic teacher submissions
-   * 2. Sum numeric indicators across all submissions
-   * 3. Fetch static rows from the two plan sheets
-   * 4. Build master report structure
+   * 1. Preload official 28 sections & indicators from the university master template
+   * 2. Aggregate dynamic teacher submissions
+   * 3. Sum numeric indicators across all submissions
+   * 4. Fetch static rows from "План роботи кафедри" & "План наукової роботи кафедри"
+   * 5. Build master report structure
    */
   public static async aggregateAll(
     assignment: CourseAssignment,
     submissions: StudentSubmissionItem[],
     statusLabel: AggregationResult['statusLabel']
   ): Promise<AggregationResult> {
-    console.log(`\n⚙️ Running Aggregation Pipeline (Status: ${statusLabel})...`);
+    console.log(`\n⚙️ Running Aggregation Pipeline with Official 28-Section Catalog (Status: ${statusLabel})...`);
 
     // 1. Process all teacher submissions
     const teachersData: TeacherReportData[] = [];
-    const allIndicatorsSet = new Set<string>();
+    const customTeacherIndicators = new Set<string>();
 
     for (const sub of submissions) {
       const data = await this.parseTeacherSubmission(sub);
       teachersData.push(data);
       for (const indicator of data.metrics.keys()) {
-        allIndicatorsSet.add(indicator);
+        customTeacherIndicators.add(indicator);
       }
     }
 
-    // Default indicators if none found in teacher sheets (ensures standard departmental sections)
-    if (allIndicatorsSet.size === 0) {
-      [
-        '1. Опубліковано статей у виданнях Scopus / Web of Science',
-        '2. Опубліковано статей у фахових виданнях України (категорія Б)',
-        '3. Опубліковано монографій (розділів монографій)',
-        '4. Опубліковано тез доповідей на міжнародних конференціях',
-        '5. Отримано патентів / авторських свідоцтв',
-        '6. Подано заявок на фінансування наукових грантів',
-        '7. Керівництво науковою роботою студентів (кількість публікацій зі студентами)',
-      ].forEach((ind) => allIndicatorsSet.add(ind));
+    // 2. Build full indicators list: official 28 template indicators first, then custom teacher indicators
+    const allIndicatorsSet = new Set<string>();
+    for (const officialInd of OFFICIAL_INDICATORS) {
+      allIndicatorsSet.add(officialInd);
+    }
+    for (const customInd of customTeacherIndicators) {
+      allIndicatorsSet.add(customInd);
     }
 
     const indicatorsList = Array.from(allIndicatorsSet);
@@ -213,7 +200,7 @@ export class Aggregator {
       totalsByIndicator.set(indicator, sum);
     }
 
-    // 2. Fetch static rows from "План роботи кафедри"
+    // 3. Fetch static rows from "План роботи кафедри"
     console.log(`📋 Fetching static rows from "План роботи кафедри" (Sheet ID: ${env.STATIC_PLAN_SHEET_ID})...`);
     let staticPlanRows: any[][] = [];
     try {
@@ -223,7 +210,7 @@ export class Aggregator {
       console.error(`⚠️ Failed to load static plan rows:`, err);
     }
 
-    // 3. Fetch static rows from "План наукової роботи кафедри"
+    // 4. Fetch static rows from "План наукової роботи кафедри"
     console.log(`🔬 Fetching static rows from "План наукової роботи кафедри" (Sheet ID: ${env.STATIC_SCI_PLAN_SHEET_ID})...`);
     let staticSciPlanRows: any[][] = [];
     try {
@@ -252,24 +239,24 @@ export class Aggregator {
     const submittedTeachers = data.teachers.filter((t) => t.hasSubmitted);
 
     // ==========================================
-    // HEADER & METADATA SECTION
+    // HEADER & METADATA SECTION (Exact format required by Scientific Department)
     // ==========================================
-    grid.push(['ЗВЕДЕНИЙ ЗВІТ ПРО НАУКОВО-ДОСЛІДНУ РОБОТУ КАФЕДРИ']);
+    grid.push(['ІНФОРМАЦІЯ ПРО НАУКОВО-ДОСЛІДНУ РОБОТУ КАФЕДРИ ЗА 2026 РІК']);
     grid.push([`Завдання: ${data.assignment.title}`]);
     grid.push([`Дата публікації завдання в Google Classroom: ${data.assignment.creationDateFormatted}`]);
     grid.push([
       `Кінцевий термін здачі (Дедлайн): ${data.assignment.deadlineFormatted} | Статус звіту: ${data.statusLabel} | Згенеровано: ${new Date().toLocaleString('uk-UA')}`,
     ]);
-    grid.push([`Подано звітів: ${submittedTeachers.length} з ${data.teachers.length} викладачів`]);
+    grid.push([`Подано звітів: ${submittedTeachers.length} з ${data.teachers.length} викладачів кафедри`]);
     grid.push([]); // Blank row
 
     // ==========================================
-    // SECTION 1: AGGREGATED DYNAMIC DATA
+    // SECTION 1: AGGREGATED SCIENTIFIC INDICATORS (28 OFFICIAL SECTIONS)
     // ==========================================
-    grid.push(['РОЗДІЛ 1. ДИНАМІЧНІ ПОКАЗНИКИ НАУКОВОЇ ДІЯЛЬНОСТІ ВИКЛАДАЧІВ (АГРЕГОВАНІ ДАНІ)']);
+    grid.push(['РОЗДІЛ 1. ДИНАМІЧНІ ТА ЗВЕДЕНІ ПОКАЗНИКИ НАУКОВОЇ ДІЯЛЬНОСТІ (28 ОФІЦІЙНИХ РОЗДІЛІВ)']);
 
     // Table header row: Indicator Name | Teacher 1 | Teacher 2 | ... | РАЗОМ (СУМА)
-    const tableHeader = ['Показник наукової діяльності'];
+    const tableHeader = ['№ та Показник наукової діяльності (відповідно до Додатків 1-28)'];
     for (const t of submittedTeachers) {
       tableHeader.push(t.studentName);
     }
@@ -288,7 +275,7 @@ export class Aggregator {
     }
 
     // Total indicators sum row
-    const totalSumsRow: any[] = ['ЗАГАЛЬНА СУМА ВСІХ ПОКАЗНИКІВ'];
+    const totalSumsRow: any[] = ['ЗАГАЛЬНА СУМА ВСІХ ЧИСЛОВИХ ПОКАЗНИКІВ'];
     let grandTotal = 0;
     for (const t of submittedTeachers) {
       let teacherTotal = 0;
@@ -331,7 +318,7 @@ export class Aggregator {
     // ==========================================
     // SECTION 4: TEACHER SUBMISSION STATUS REGISTRY
     // ==========================================
-    grid.push(['РОЗДІЛ 4. РЕЄСТР ПОДАННЯ ЗВІТІВ ВИКЛАДАЧАМИ КАФЕДРИ']);
+    grid.push(['РОЗДІЛ 4. РЕЄСТР ПОДАННЯ ЗВІТІВ ТА ПРИКРІПЛЕНИХ ДОДАТКІВ']);
     grid.push(['№', 'ПІБ Викладача', 'Електронна пошта', 'Статус у Google Classroom', 'Дата здачі', 'Прикріплені матеріали']);
 
     data.teachers.forEach((t, idx) => {

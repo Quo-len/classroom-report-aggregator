@@ -7,7 +7,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "test": "tsx test/test-aggregator.ts",
+    "test": "tsx test/test-aggregator.ts && tsx test/test-doc-parser.ts",
+    "test:parser": "tsx test/test-doc-parser.ts",
     "check": "tsx src/index.ts --healthcheck",
     "dry-run": "tsx src/index.ts --auto --dry-run",
     "auth:init": "tsx src/index.ts --auth-init"
@@ -22,6 +23,8 @@
   "author": "Antigravity Expert Backend Team",
   "license": "ISC",
   "dependencies": {
+    "@types/adm-zip": "^0.5.8",
+    "adm-zip": "^0.6.1",
     "dotenv": "^16.4.7",
     "googleapis": "^144.0.0",
     "telegraf": "^4.16.3",
