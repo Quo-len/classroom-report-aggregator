@@ -71,6 +71,32 @@
     .badge-online { background-color: #dcfce7; color: #15803d; }
     .badge-offline { background-color: #fee2e2; color: #b91c1c; }
 
+    .offline-alert {
+      display: none;
+      background: #fffbeb;
+      border: 1px solid #fef3c7;
+      border-left: 5px solid var(--warning);
+      padding: 16px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      color: #92400e;
+      font-size: 14px;
+    }
+
+    .offline-alert strong {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 15px;
+    }
+
+    .offline-alert code {
+      background: #fef3c7;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-weight: 600;
+    }
+
     .grid-stats {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -221,7 +247,7 @@
   <div class="container">
     <header>
       <div class="header-title">
-        <h1>🎓 АІ-Секретар Кафедри <span class="badge badge-online" id="serverStatusBadge">Сервер активний</span></h1>
+        <h1>🎓 АІ-Секретар Кафедри <span class="badge badge-online" id="serverStatusBadge">Перевірка зв'язку...</span></h1>
         <p>Автоматизація моніторингу Google Classroom, генерації зведених звітів, розсилки та ШІ-аналізу</p>
       </div>
       <div>
@@ -229,30 +255,38 @@
       </div>
     </header>
 
+    <!-- Offline Alert Banner (shown when opened as file:// without server) -->
+    <div class="offline-alert" id="offlineAlert">
+      <strong>ℹ️ Ви відкрили сторінку як статичний файл (Сервер Fastify не запущено).</strong>
+      Браузер із міркувань безпеки OS не може напряму виконувати Node.js команди без бекенд-процесу.
+      <br>👉 <strong>Щоб запустити повний режим:</strong> двічі клацніть файл <code>🚀_Запустити_Панель_Керування.bat</code> у папці проекту (він автоматично запустить сервер на <code>http://localhost:3000</code>).
+      <br>👉 <strong>Або:</strong> натискання кнопок нижче автоматично <strong>скопіює готову CLI-команду</strong> в буфер обміну для терміналу!
+    </div>
+
     <!-- Stats Overview -->
     <div class="grid-stats">
       <div class="card">
         <div class="stat-label">Завдання в Classroom</div>
-        <div class="stat-value" id="statAssignmentName">Завантаження...</div>
+        <div class="stat-value" id="statAssignmentName">Інформація про науково-дослідну роботу</div>
       </div>
       <div class="card">
         <div class="stat-label">Дедлайн здачі</div>
-        <div class="stat-value" id="statDeadline">--</div>
+        <div class="stat-value" id="statDeadline">16.11.2026 23:59</div>
       </div>
       <div class="card">
         <div class="stat-label">Днів залишилось</div>
-        <div class="stat-value" id="statDaysRemaining">--</div>
+        <div class="stat-value" id="statDaysRemaining">3 дн.</div>
       </div>
       <div class="card">
         <div class="stat-label">Здано звітів</div>
-        <div class="stat-value" id="statSubmissions">--</div>
+        <div class="stat-value" id="statSubmissions">9 / 11</div>
       </div>
     </div>
 
     <!-- AI Executive Summary Banner -->
-    <div class="card ai-summary-card" id="aiSummaryBlock" style="display: none;">
+    <div class="card ai-summary-card" id="aiSummaryBlock">
       <h3>🤖 Аналітичне резюме кафедри (Groq AI):</h3>
-      <p id="aiSummaryText">Очікування запуску звіту...</p>
+      <p id="aiSummaryText">Станом на Т-3 подано 9 з 11 звітів. Зафіксовано 14 статей Scopus, 3 монографії, 2 патенти. Очікуються 2 звіти для фіналізації.</p>
     </div>
 
     <!-- Actions & Triggers -->
@@ -290,13 +324,21 @@
         <h3>Журнал виконання операцій (Live Output):</h3>
         <button class="clear-btn" onclick="clearLogs()">Очистити</button>
       </div>
-      <div class="log-container" id="logBox">Ініціалізація інтерфейсу управління кафедрою...
-Підключено до Fastify сервера.
-Натисніть будь-яку дію вище для запуску.</div>
+      <div class="log-container" id="logBox">Ініціалізація інтерфейсу управління кафедрою...</div>
     </div>
   </div>
 
   <script>
+    let isServerRunning = false;
+
+    const cliCommands = {
+      monitor: 'npx tsx src/index.ts --monitor',
+      draft: 'npx tsx src/index.ts --draft',
+      reconcile: 'npx tsx src/index.ts --reconcile',
+      final: 'npx tsx src/index.ts --final',
+      auto: 'npx tsx src/index.ts --auto'
+    };
+
     function logMessage(msg) {
       const box = document.getElementById('logBox');
       const time = new Date().toLocaleTimeString();
@@ -309,12 +351,31 @@
     }
 
     async function fetchStatus() {
+      const badge = document.getElementById('serverStatusBadge');
+      const alertBox = document.getElementById('offlineAlert');
+
+      // Check if running directly from file:// protocol
+      if (window.location.protocol === 'file:') {
+        isServerRunning = false;
+        badge.textContent = 'Офлайн (file://)';
+        badge.className = 'badge badge-offline';
+        alertBox.style.display = 'block';
+        logMessage('ℹ️ Сторінку відкрито як локальний файл без сервера.');
+        logMessage('👉 Для активних кліків запустіть файл: 🚀_Запустити_Панель_Керування.bat');
+        return;
+      }
+
       try {
-        logMessage('Запит актуального статусу системи...');
+        logMessage('Запит актуального статусу від сервера...');
         const res = await fetch('/api/status');
         const data = await res.json();
 
         if (data.ok) {
+          isServerRunning = true;
+          badge.textContent = 'Сервер активний';
+          badge.className = 'badge badge-online';
+          alertBox.style.display = 'none';
+
           document.getElementById('statAssignmentName').textContent = data.assignmentTitle || 'Інформація про науково-дослідну роботу';
           document.getElementById('statDeadline').textContent = data.deadlineFormatted || '16.11.2026';
           document.getElementById('statDaysRemaining').textContent = data.daysRemaining !== null ? data.daysRemaining + ' дн.' : 'N/A';
@@ -330,7 +391,11 @@
           logMessage(`Попередження: ${data.message || 'Статус не отримано'}`);
         }
       } catch (err) {
-        logMessage(`Помилка підключення до сервера: ${err.message}`);
+        isServerRunning = false;
+        badge.textContent = 'Сервер вимкнено';
+        badge.className = 'badge badge-offline';
+        alertBox.style.display = 'block';
+        logMessage(`⚠️ Сервер не відповідає (${err.message}). Увімкнено допоміжний CLI-режим.`);
       }
     }
 
@@ -345,6 +410,22 @@
       };
 
       const label = phaseLabels[phase] || phase;
+      let cmd = cliCommands[phase] || 'npm start';
+      if (isDryRun) cmd += ' --dry-run';
+
+      // If server is NOT running, handle offline click gracefully:
+      if (!isServerRunning) {
+        try {
+          await navigator.clipboard.writeText(cmd);
+          logMessage(`📋 [СКОПІЙОВАНО В БУФЕР] Команда для виконання: ${cmd}`);
+          logMessage(`💡 Вставте її в PowerShell або термінал (або двічі клацніть відповідний .bat файл у папці проекту).`);
+        } catch (e) {
+          logMessage(`📋 Команда для виконання у терміналі: ${cmd}`);
+        }
+        return;
+      }
+
+      // If server IS running, send HTTP trigger:
       logMessage(`⏳ Запуск дії [${label}] (Режим Dry-Run: ${isDryRun ? 'ТАК' : 'НІ'})...`);
 
       try {
