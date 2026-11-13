@@ -93,7 +93,7 @@ async function runDraftPhase(
   await NotifyService.sendMissingTeachersReminder(missingTeachers);
 
   // 3. Send Telegram and email to Head of Department with missing list
-  await NotifyService.notifyHeadOfDeptMissingList(missingTeachers, webViewLink);
+  await NotifyService.notifyHeadOfDeptMissingList(missingTeachers, webViewLink, aggregatedData.aiSummary);
 
   logInfo(`Draft & Warn phase completed successfully.`);
   return webViewLink;
@@ -132,6 +132,7 @@ async function runReconcilePhase(
 <b>Завдання:</b> ${assignment.title}
 <b>Подано звітів:</b> ${submittedCount} з ${submissions.length} викладачів
 <b>Оновлений звіт:</b> <a href="${webViewLink}">Переглянути оновлений звіт</a>
+${aggregatedData.aiSummary ? `\n\n<b>🤖 ШІ-Резюме:</b>\n<i>${aggregatedData.aiSummary}</i>` : ''}
   `.trim();
   await NotifyService.sendTelegramMessage(tgMsg);
 
@@ -176,7 +177,8 @@ async function runFinalPhase(
     webViewLink,
     jpegFiles,
     submittedTeachers.length,
-    submissions.length
+    submissions.length,
+    aggregatedData.aiSummary
   );
 
   logInfo(`Final delivery completed successfully!`);

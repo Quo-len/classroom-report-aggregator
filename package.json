@@ -7,7 +7,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "test": "tsx test/test-aggregator.ts && tsx test/test-doc-parser.ts",
+    "test": "tsx test/test-aggregator.ts && tsx test/test-doc-parser.ts && tsx test/test-ai-service.ts",
+    "test:ai": "tsx test/test-ai-service.ts",
     "test:parser": "tsx test/test-doc-parser.ts",
     "check": "tsx src/index.ts --healthcheck",
     "dry-run": "tsx src/index.ts --auto --dry-run",
@@ -27,6 +28,7 @@
     "adm-zip": "^0.6.1",
     "dotenv": "^16.4.7",
     "googleapis": "^144.0.0",
+    "groq-sdk": "^1.6.0",
     "telegraf": "^4.16.3",
     "zod": "^3.24.2"
   },

@@ -1,6 +1,7 @@
 import { SheetsService } from '../services/sheets.service';
 import { DriveService } from '../services/drive.service';
 import { DocParserService } from '../services/doc-parser.service';
+import { AIService } from '../services/ai.service';
 import { CourseAssignment, StudentSubmissionItem } from '../services/classroom.service';
 import { OFFICIAL_INDICATORS, OFFICIAL_SECTIONS } from '../config/official-template';
 import { env } from '../config/env';
@@ -29,6 +30,7 @@ export interface AggregationResult {
   totalsByIndicator: Map<string, number>;
   staticPlanRows: any[][];
   staticSciPlanRows: any[][];
+  aiSummary?: string;
 }
 
 export class Aggregator {
@@ -220,6 +222,18 @@ export class Aggregator {
       console.error(`⚠️ Failed to load static scientific plan rows:`, err);
     }
 
+    // 5. Generate AI Executive Summary (via Groq LLM or deterministic fallback)
+    const missingList = teachersData.filter((t) => !t.hasSubmitted).map((t) => t.studentName);
+    const submittedCount = teachersData.filter((t) => t.hasSubmitted).length;
+    const aiSummary = await AIService.generateExecutiveSummary({
+      assignmentTitle: assignment.title,
+      totalSubmitted: submittedCount,
+      totalTeachers: teachersData.length,
+      missingTeachers: missingList,
+      totalsByIndicator,
+      statusLabel,
+    });
+
     return {
       assignment,
       statusLabel,
@@ -228,6 +242,7 @@ export class Aggregator {
       totalsByIndicator,
       staticPlanRows,
       staticSciPlanRows,
+      aiSummary,
     };
   }
 
@@ -248,6 +263,9 @@ export class Aggregator {
       `Кінцевий термін здачі (Дедлайн): ${data.assignment.deadlineFormatted} | Статус звіту: ${data.statusLabel} | Згенеровано: ${new Date().toLocaleString('uk-UA')}`,
     ]);
     grid.push([`Подано звітів: ${submittedTeachers.length} з ${data.teachers.length} викладачів кафедри`]);
+    if (data.aiSummary) {
+      grid.push([`Аналітичне резюме (AI Executive Summary): ${data.aiSummary}`]);
+    }
     grid.push([]); // Blank row
 
     // ==========================================

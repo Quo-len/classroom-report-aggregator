@@ -17,6 +17,7 @@ const envSchema = z.object({
   STATIC_PLAN_SHEET_ID: z.string().min(1, 'STATIC_PLAN_SHEET_ID is required'),
   STATIC_SCI_PLAN_SHEET_ID: z.string().min(1, 'STATIC_SCI_PLAN_SHEET_ID is required'),
   MASTER_OUTPUT_FOLDER_ID: z.string().min(1, 'MASTER_OUTPUT_FOLDER_ID is required'),
+  GROQ_API_KEY: z.string().optional(),
 });
 
 let cachedConfig: (z.infer<typeof envSchema> & { credentialsPath: string; tokenPath: string }) | null = null;

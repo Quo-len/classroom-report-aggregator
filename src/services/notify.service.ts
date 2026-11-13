@@ -187,11 +187,16 @@ export class NotifyService {
    */
   public static async notifyHeadOfDeptMissingList(
     missingTeachers: { name: string; email: string }[],
-    preliminarySheetUrl: string
+    preliminarySheetUrl: string,
+    aiSummary?: string
   ): Promise<void> {
     const namesList = missingTeachers.length > 0
       ? missingTeachers.map((t, idx) => `${idx + 1}. ${t.name} (${t.email || 'без email'})`).join('\n')
       : 'Усі викладачі вчасно подали звіти!';
+
+    const summarySection = aiSummary
+      ? `\n\n<b>🤖 ШІ-Резюме кафедри (AI Executive Summary):</b>\n<i>${aiSummary}</i>`
+      : '';
 
     // Telegram message
     const tgMessage = `
@@ -202,6 +207,7 @@ export class NotifyService {
 
 <b>⚠️ Не подали звіт (${missingTeachers.length} викладачів):</b>
 ${namesList}
+${summarySection}
 
 <i>Викладачам надіслано автоматичне попередження (залишилось 48 годин).</i>
     `.trim();
@@ -213,6 +219,7 @@ ${namesList}
       <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
         <h2 style="color: #2c3e50;">Попередній звіт про стан подання наукових звітів (Т-3 дні)</h2>
         <p>Завдання: <strong>«${env.ASSIGNMENT_NAME}»</strong></p>
+        ${aiSummary ? `<div style="background-color: #e8f4f8; padding: 12px; border-left: 4px solid #2980b9; margin: 15px 0;"><strong>🤖 Аналітичне резюме (Groq AI):</strong><br/>${aiSummary}</div>` : ''}
         <p>Сформовано попередній зведений Google Sheet на основі наявних на цей момент матеріалів:</p>
         <p><a href="${preliminarySheetUrl}" style="background-color: #2980b9; color: white; padding: 10px 18px; text-decoration: none; border-radius: 4px; display: inline-block;">Відкрити попередній зведений звіт</a></p>
         <h3 style="color: #c0392b;">Список викладачів, які ще не подали звіт (${missingTeachers.length} осіб):</h3>
@@ -237,7 +244,8 @@ ${namesList}
     finalSheetUrl: string,
     jpegAttachments: DownloadedAsset[],
     totalSubmitted: number,
-    totalEnrolled: number
+    totalEnrolled: number,
+    aiSummary?: string
   ): Promise<void> {
     const recipients = [env.SCI_DEPT_EMAIL, env.HEAD_OF_DEPT_EMAIL];
 
@@ -245,6 +253,7 @@ ${namesList}
       <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
         <h2 style="color: #27ae60;">🎓 Фінальний зведений звіт про науково-дослідну роботу кафедри</h2>
         <p>Термін здачі звітів вичерпано. Звіт сформовано та агреговано автоматичною системою кафедри.</p>
+        ${aiSummary ? `<div style="background-color: #eafaf1; padding: 12px; border-left: 4px solid #27ae60; margin: 15px 0;"><strong>🤖 Підсумкове резюме (Groq AI):</strong><br/>${aiSummary}</div>` : ''}
         <ul>
           <li><strong>Назва завдання:</strong> «${env.ASSIGNMENT_NAME}»</li>
           <li><strong>Подано звітів:</strong> ${totalSubmitted} з ${totalEnrolled} викладачів</li>
@@ -268,6 +277,10 @@ ${namesList}
       attachments: jpegAttachments,
     });
 
+    const summarySection = aiSummary
+      ? `\n\n<b>🤖 Підсумкове резюме:</b>\n<i>${aiSummary}</i>`
+      : '';
+
     // Notify Head of Dept on Telegram
     const tgMessage = `
 <b>🚀 Фінальний кафедральний звіт успішно надіслано!</b>
@@ -276,6 +289,7 @@ ${namesList}
 <b>Подано звітів:</b> ${totalSubmitted} / ${totalEnrolled}
 <b>Додано JPEG фотозвітів:</b> ${jpegAttachments.length}
 <b>Отримувачі:</b> Науковий відділ (${env.SCI_DEPT_EMAIL}) та Завідувач кафедри
+${summarySection}
 
 <b>Посилання на підсумковий Google Sheet:</b>
 <a href="${finalSheetUrl}">Переглянути фінальний документ</a>
