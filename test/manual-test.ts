@@ -119,7 +119,7 @@ async function runManualTest() {
         for (const row of rows) {
           if (!row || row.length < 2) continue;
           const indicatorName = String(row[0] || '').trim();
-          if (!indicatorName || indicatorName.toLowerCase().startsWith('показник') || indicatorName.toLowerCase().startsWith('№')) {
+          if (!indicatorName || DocParserService.isNonIndicatorOrGarbage(indicatorName)) {
             continue;
           }
           let metricVal = 0;
@@ -132,8 +132,9 @@ async function runManualTest() {
               break;
             }
           }
-          if (foundValue) {
-            metrics.set(indicatorName, metricVal);
+          // Only store if positive metric value
+          if (foundValue && metricVal > 0) {
+            metrics.set(indicatorName, (metrics.get(indicatorName) || 0) + metricVal);
           }
         }
       }
@@ -165,29 +166,57 @@ async function runManualTest() {
   for (const ind of OFFICIAL_INDICATORS) {
     let sum = 0;
     for (const t of teachers) {
-      const val = teacherMetricsMap.get(t.name)?.get(ind.id) || 0;
+      const val = teacherMetricsMap.get(t.name)?.get(ind) || 0;
       sum += val;
     }
-    totalsByIndicator.set(ind.id, sum);
+    totalsByIndicator.set(ind, sum);
   }
 
-  const sampleIndicators = [
-    { id: 'sec_1_monographs_total', title: 'Монографії (усього)' },
-    { id: 'sec_3_scopus_wos', title: 'Статті Scopus / Web of Science' },
-    { id: 'sec_3_category_b', title: 'Статті у фахових виданнях категорії Б' },
-    { id: 'sec_10_patents_total', title: 'Патенти та корисні моделі' },
-    { id: 'sec_18_grants_intl', title: 'Міжнародні гранти (Horizon Europe)' },
-  ];
+  // Also include any valid custom indicators extracted
+  const allIndicatorsSet = new Set<string>(OFFICIAL_INDICATORS);
+  for (const t of teachers) {
+    const m = teacherMetricsMap.get(t.name);
+    if (m) {
+      for (const [k, v] of m.entries()) {
+        if (!DocParserService.isNonIndicatorOrGarbage(k)) {
+          allIndicatorsSet.add(k);
+          totalsByIndicator.set(k, (totalsByIndicator.get(k) || 0) + v);
+        }
+      }
+    }
+  }
+  const fullIndicatorsList = Array.from(allIndicatorsSet);
 
-  for (const s of sampleIndicators) {
-    const total = totalsByIndicator.get(s.id) || 0;
-    console.log(`  • ${s.title}: ${total}`);
+  let nonZeroCount = 0;
+  for (const [ind, total] of totalsByIndicator.entries()) {
+    if (total > 0) {
+      console.log(`  • ${ind}: ${total}`);
+      nonZeroCount++;
+    }
+  }
+  if (nonZeroCount === 0) {
+    console.log('  • Поки що всі зведені числові показники дорівнюють 0.');
   }
 
   // 4. AI Executive Summary Generation
   console.log('\n🤖 4. Генерація аналітичного резюме кафедри через Groq AI:');
   const submittedTeachers = teachers.filter((t) => t.files.length > 0);
   const missingTeachers = teachers.filter((t) => t.files.length === 0).map((t) => t.name);
+
+  const teacherEvidenceList: any[] = [];
+  for (const t of teachers) {
+    if (t.folder) {
+      for (const f of t.files) {
+        if (f.endsWith('.docx')) {
+          const filePath = path.join(docsDir, t.folder, f);
+          const buf = fs.readFileSync(filePath);
+          const parsed = DocParserService.parseDocxBuffer(buf);
+          const qual = DocParserService.extractQualitativeEvidence(parsed.fullText, parsed.paragraphs, f);
+          teacherEvidenceList.push(qual);
+        }
+      }
+    }
+  }
 
   const aiSummary = await AIService.generateExecutiveSummary({
     assignmentTitle: 'Інформація про науково-дослідну роботу за 2026 рік',
@@ -196,6 +225,7 @@ async function runManualTest() {
     missingTeachers,
     totalsByIndicator,
     statusLabel: 'Попередній звіт (Т-3)',
+    digestedEvidence: teacherEvidenceList,
   });
 
   console.log(`  Резюме:\n  "${aiSummary}"\n`);
@@ -205,27 +235,26 @@ async function runManualTest() {
   const mockAssignment: CourseAssignment = {
     id: 'manual-test-assign-1',
     title: 'Інформація про науково-дослідну роботу за 2026 рік',
-    creationTime: new Date().toISOString(),
+    creationDate: new Date(),
     creationDateFormatted: '10.11.2026',
-    dueDate: { year: 2026, month: 11, day: 16 },
-    dueTime: { hours: 23, minutes: 59 },
+    deadline: new Date(Date.now() + 86400000 * 3),
     deadlineFormatted: '16.11.2026 23:59',
+    daysRemaining: 3,
+    raw: {},
   };
-
-  const indicatorTitles = OFFICIAL_INDICATORS.map((i) => i.title);
 
   const grid = Aggregator.buildMasterGrid({
     assignment: mockAssignment,
-    statusLabel: 'Попередній звіт (Т-3)',
+    statusLabel: 'Чернетка (T-3)',
     teachers: teachers.map((t) => ({
-      studentId: t.name,
       studentName: t.name,
       studentEmail: t.email,
       hasSubmitted: t.files.length > 0,
+      submissionState: t.files.length > 0 ? 'TURNED_IN' : 'CREATED',
+      attachmentsList: t.files.join(', ') || 'Немає файлів',
       metrics: teacherMetricsMap.get(t.name) || new Map(),
-      attachmentNames: t.files,
     })),
-    indicators: indicatorTitles,
+    indicators: fullIndicatorsList,
     totalsByIndicator,
     staticPlanRows: [
       ['СТАТИЧНІ ДАНІ', 'План роботи кафедри на 2026 рік (рядок 1)', 'Виконано'],

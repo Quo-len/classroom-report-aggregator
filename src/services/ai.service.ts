@@ -1,5 +1,5 @@
 import https from 'https';
-import { DocParserService } from './doc-parser.service';
+import { DocParserService, DigestedTeacherEvidence } from './doc-parser.service';
 import { env } from '../config/env';
 
 export interface AISummaryInput {
@@ -9,6 +9,7 @@ export interface AISummaryInput {
   missingTeachers: string[];
   totalsByIndicator: Map<string, number>;
   statusLabel: string;
+  digestedEvidence?: DigestedTeacherEvidence[];
 }
 
 export class AIService {
@@ -177,6 +178,29 @@ ${text.slice(0, 8000)}
       }
     });
 
+    // Compile digested qualitative evidence from actual teacher files
+    const allEvidence = input.digestedEvidence || [];
+    const samplePubs = allEvidence.flatMap((e) => e.publications).filter(Boolean).slice(0, 4);
+    const samplePatents = allEvidence.flatMap((e) => e.patents).filter(Boolean).slice(0, 3);
+    const sampleGrants = allEvidence.flatMap((e) => e.grants).filter(Boolean).slice(0, 3);
+    const sampleStudents = allEvidence.flatMap((e) => e.studentsWork).filter(Boolean).slice(0, 2);
+
+    const evidenceSummaryParts: string[] = [];
+    if (samplePubs.length > 0) {
+      evidenceSummaryParts.push(`Публікації звітного періоду: ${samplePubs.join('; ')}`);
+    }
+    if (samplePatents.length > 0) {
+      evidenceSummaryParts.push(`Патенти та охоронні документи: ${samplePatents.join('; ')}`);
+    }
+    if (sampleGrants.length > 0) {
+      evidenceSummaryParts.push(`Гранти та проєкти: ${sampleGrants.join('; ')}`);
+    }
+    if (sampleStudents.length > 0) {
+      evidenceSummaryParts.push(`Студентська наука: ${sampleStudents.join('; ')}`);
+    }
+
+    const qualitativeEvidenceText = evidenceSummaryParts.join('\n');
+
     // 1. Fallback deterministic summary if Groq is not available
     if (!this.isAvailable()) {
       const pendingText =
@@ -187,9 +211,13 @@ ${text.slice(0, 8000)}
       const highlightsPreview =
         highlights.length > 0
           ? `Ключові показники кафедри: ${highlights.slice(0, 4).join('; ')}.`
-          : 'Наразі зафіксовано нульові або попередні показники.';
+          : 'Наразі зафіксовано попередні зведені показники.';
 
-      return `Зведений звіт за напрямом «${input.assignmentTitle}» (статус: ${input.statusLabel}). Здано ${input.totalSubmitted} з ${input.totalTeachers} звітів. ${highlightsPreview} ${pendingText}`;
+      const qualitativePreview = samplePubs.length > 0 || sampleGrants.length > 0 || samplePatents.length > 0
+        ? ` Серед результатів: ${[sampleGrants[0], samplePatents[0], samplePubs[0]].filter(Boolean).join('; ')}.`
+        : '';
+
+      return `Зведений звіт за напрямом «${input.assignmentTitle}» (статус: ${input.statusLabel}). Здано ${input.totalSubmitted} з ${input.totalTeachers} звітів. ${highlightsPreview}${qualitativePreview} ${pendingText}`;
     }
 
     // 2. Groq AI Generated Summary
@@ -202,13 +230,16 @@ ${text.slice(0, 8000)}
 - Етап / Статус: ${input.statusLabel}
 - Подано звітів: ${input.totalSubmitted} з ${input.totalTeachers} викладачів
 - Викладачі, які ще не подали: ${input.missingTeachers.join(', ') || 'усі подали'}
-- Загальні показники кафедри за рік:
-${highlights.slice(0, 15).join('\n') || 'Дані відсутні або нульові'}
+- Загальні числові показники кафедри:
+${highlights.slice(0, 15).join('\n') || 'Числові дані відсутні або попередні'}
+
+- Фактичні наукові результати, витягнуті безпосередньо з оброблених файлів викладачів:
+${qualitativeEvidenceText || 'Фактичні текстові описи відсутні'}
 
 Вимоги:
-1. Текст українською мовою, 2-3 речення (до 70 слів).
+1. Текст українською мовою, 2-3 зв'язних речення (до 75 слів).
 2. Діловий академічний стиль.
-3. Виділіть головні досягнення (Scopus, патенти, гранти, посібники) та стан дедлайну.
+3. Продемонструйте обізнаність зі змістом файлів: обов'язково конкретно згадайте ключові досягнення (наприклад, конкретні назви міжнародних грантів, журналів Scopus, теми монографій або номер/назву патенту) та стан дедлайну.
       `.trim();
 
       const summary = await this.callGroqChat(
@@ -216,7 +247,7 @@ ${highlights.slice(0, 15).join('\n') || 'Дані відсутні або нул
           { role: 'system', content: 'Ви — секретар-аналітик наукового підрозділу університету.' },
           { role: 'user', content: prompt },
         ],
-        { max_tokens: 250 }
+        { max_tokens: 300 }
       );
 
       if (summary) {

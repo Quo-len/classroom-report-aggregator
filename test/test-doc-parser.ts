@@ -194,6 +194,44 @@ if (fs.existsSync(petrenkoXlsxPath)) {
   assert(grid.length > 50, 'Petrenko test xlsx contains full table grid');
 }
 
+// ==========================================
+// 7. Testing Structural Awareness & Garbage Filtering
+// ==========================================
+console.log('\n📌 7. Testing Structural Awareness & Garbage/TOC/Figure Filtering:');
+
+// Must filter out table headers and captions
+assert(DocParserService.isNonIndicatorOrGarbage('Таблиця 1. Список статей'), 'Filters "Таблиця 1. Список статей"');
+assert(DocParserService.isNonIndicatorOrGarbage('Табл. 2'), 'Filters "Табл. 2"');
+assert(DocParserService.isNonIndicatorOrGarbage('Table 4: Publications'), 'Filters "Table 4: Publications"');
+assert(DocParserService.isNonIndicatorOrGarbage('№ п/п'), 'Filters "№ п/п"');
+assert(DocParserService.isNonIndicatorOrGarbage('Назва публікації'), 'Filters "Назва публікації"');
+assert(DocParserService.isNonIndicatorOrGarbage('Бібліографічні дані'), 'Filters "Бібліографічні дані"');
+
+// Must filter out pictures, drawings, diagrams, figures
+assert(DocParserService.isNonIndicatorOrGarbage('Рис. 1. Архітектура мікросервісів'), 'Filters "Рис. 1. Архітектура мікросервісів"');
+assert(DocParserService.isNonIndicatorOrGarbage('Рисунок 3'), 'Filters "Рисунок 3"');
+assert(DocParserService.isNonIndicatorOrGarbage('Малюнок 2: Схема мережі'), 'Filters "Малюнок 2: Схема мережі"');
+assert(DocParserService.isNonIndicatorOrGarbage('Фото доповіді на семінарі'), 'Filters "Фото доповіді на семінарі"');
+assert(DocParserService.isNonIndicatorOrGarbage('Figure 2. Performance comparison'), 'Filters "Figure 2. Performance comparison"');
+
+// Must filter out Table of Contents & document structural elements
+assert(DocParserService.isNonIndicatorOrGarbage('Зміст'), 'Filters "Зміст"');
+assert(DocParserService.isNonIndicatorOrGarbage('Table of Contents'), 'Filters "Table of Contents"');
+assert(DocParserService.isNonIndicatorOrGarbage('Вступ'), 'Filters "Вступ"');
+assert(DocParserService.isNonIndicatorOrGarbage('Висновки'), 'Filters "Висновки"');
+assert(DocParserService.isNonIndicatorOrGarbage('Список літератури'), 'Filters "Список літератури"');
+
+// Must filter out metadata, author, and administrative lines
+assert(DocParserService.isNonIndicatorOrGarbage('Виконавець: доцент Іваненко О.В.'), 'Filters "Виконавець: доцент Іваненко О.В."');
+assert(DocParserService.isNonIndicatorOrGarbage('П.І.Б. лаборанта кафедри'), 'Filters "П.І.Б. лаборанта кафедри"');
+assert(DocParserService.isNonIndicatorOrGarbage('Мобільний телефон лаборанта'), 'Filters "Мобільний телефон лаборанта"');
+assert(DocParserService.isNonIndicatorOrGarbage('Вказати інформацію (ОБОВ’ЯЗКОВО!!!):'), 'Filters "Вказати інформацію (ОБОВ’ЯЗКОВО!!!):"');
+
+// Legitimate indicators must NOT be filtered out
+assert(!DocParserService.isNonIndicatorOrGarbage('Розділ 3. Публікації — статті в журналах Scopus'), 'Preserves Scopus indicator');
+assert(!DocParserService.isNonIndicatorOrGarbage('Розділ 10. Інформація про авторські свідоцтва, патенти, ліцензії, отримані в 2026 р. — вказати кількість'), 'Preserves Patents indicator');
+assert(!DocParserService.isNonIndicatorOrGarbage('Розділ 18. Кількість грантів від міжнародних фондів та міжнародних проєктів — кількість міжнародних проєктів з участю науковців'), 'Preserves Grants indicator');
+
 // Summary
 console.log(`\n==============================================`);
 console.log(`Results: ${passedTests}/${totalTests} tests passed (${failedTests} failed)`);

@@ -31,6 +31,78 @@ export class DriveService {
   }
 
   /**
+   * Extracts a Google Drive Folder ID from a URL, markdown link, or plain text
+   */
+  public static extractDriveFolderId(input?: string): string | null {
+    if (!input) return null;
+    const str = input.trim();
+    // 1. Match Google Drive folder URLs
+    const folderMatch =
+      str.match(/drive\.google\.com\/drive\/(?:u\/\d+\/)?folders\/([a-zA-Z0-9_-]+)/i) ||
+      str.match(/drive\.google\.com\/(?:open|folderview)\?id=([a-zA-Z0-9_-]+)/i);
+    if (folderMatch) {
+      return folderMatch[1];
+    }
+    // 2. Direct folder ID string (alphanumeric with underscores/dashes, length 20 to 50)
+    if (/^[a-zA-Z0-9_-]{20,50}$/.test(str)) {
+      return str;
+    }
+    return null;
+  }
+
+  /**
+   * Lists all files inside a Google Drive folder, optionally traversing subfolders recursively
+   */
+  public static async listFilesInFolder(folderId: string, recursive: boolean = true): Promise<DriveFileInfo[]> {
+    const drive = await this.getClient();
+    const results: DriveFileInfo[] = [];
+    try {
+      console.log(`📂 Scanning Google Drive folder [${folderId}] (recursive=${recursive})...`);
+      let pageToken: string | undefined = undefined;
+
+      do {
+        const res: any = await drive.files.list({
+          q: `'${folderId}' in parents and trashed = false`,
+          fields: 'nextPageToken, files(id, name, mimeType, webViewLink, parents)',
+          pageSize: 100,
+          supportsAllDrives: true,
+          includeItemsFromAllDrives: true,
+          pageToken,
+        });
+
+        const files = res.data.files || [];
+        for (const file of files) {
+          if (!file.id) continue;
+          const info: DriveFileInfo = {
+            id: file.id,
+            name: file.name || 'unnamed',
+            mimeType: file.mimeType || 'application/octet-stream',
+            webViewLink: file.webViewLink || undefined,
+          };
+
+          if (file.mimeType === 'application/vnd.google-apps.folder') {
+            if (recursive) {
+              console.log(`📁 Entering subfolder: "${file.name}" [${file.id}]...`);
+              const subFiles = await this.listFilesInFolder(file.id, recursive);
+              results.push(...subFiles);
+            }
+          } else {
+            results.push(info);
+          }
+        }
+
+        pageToken = res.data.nextPageToken || undefined;
+      } while (pageToken);
+
+      console.log(`✅ Found ${results.length} files in Google Drive folder [${folderId}]`);
+      return results;
+    } catch (error) {
+      console.error(`❌ Failed to list files in Google Drive folder [${folderId}]:`, error);
+      return results;
+    }
+  }
+
+  /**
    * Retrieves file metadata
    */
   public static async getFileMetadata(fileId: string): Promise<DriveFileInfo | null> {
@@ -130,10 +202,10 @@ export class DriveService {
   }
 
   /**
-   * Collects all JPEG attachments from submissions
+   * Collects all JPEG attachments from submissions, including from folders and zip archives
    */
   public static async collectJpegAttachments(
-    submissions: { attachments: { id?: string; title?: string }[]; studentName: string }[]
+    submissions: { attachments: { id?: string; title?: string; alternateLink?: string; mimeType?: string }[]; studentName: string }[]
   ): Promise<DownloadedAsset[]> {
     const jpegs: DownloadedAsset[] = [];
 
@@ -141,26 +213,47 @@ export class DriveService {
       for (const att of sub.attachments) {
         if (!att.id) continue;
 
-        const isJpegName = att.title && /\.(jpe?g)$/i.test(att.title);
-        if (!isJpegName) {
-          // Check mimeType via metadata if not explicit in filename
+        try {
           const meta = await this.getFileMetadata(att.id);
-          if (!meta || (!meta.mimeType.includes('image/jpeg') && !/\.(jpe?g)$/i.test(meta.name))) {
-            continue;
+          const mimeType = meta?.mimeType || att.mimeType || '';
+          const title = meta?.name || att.title || '';
+
+          // 1. Direct JPEG
+          if (/\.(jpe?g)$/i.test(title) || mimeType.includes('image/jpeg')) {
+            const safeFilename = `${sub.studentName.replace(/[\/\\?%*:|"<>]/g, '_')}_${title || 'photo.jpg'}`;
+            const buffer = await this.downloadFileBuffer(att.id, safeFilename);
+            if (buffer) {
+              jpegs.push({
+                filename: safeFilename,
+                mimeType: 'image/jpeg',
+                data: buffer,
+                driveFileId: att.id,
+                authorName: sub.studentName,
+              });
+            }
           }
-        }
-
-        const safeFilename = `${sub.studentName.replace(/[\/\\?%*:|"<>]/g, '_')}_${att.title || 'photo.jpg'}`;
-        const buffer = await this.downloadFileBuffer(att.id, safeFilename);
-
-        if (buffer) {
-          jpegs.push({
-            filename: safeFilename,
-            mimeType: 'image/jpeg',
-            data: buffer,
-            driveFileId: att.id,
-            authorName: sub.studentName,
-          });
+          // 2. Google Drive Folder
+          else if (mimeType === 'application/vnd.google-apps.folder' || att.alternateLink?.includes('folders/')) {
+            console.log(`📂 Scanning folder [${title}] for JPEG attachments (${sub.studentName})...`);
+            const folderFiles = await this.listFilesInFolder(att.id, true);
+            for (const f of folderFiles) {
+              if (/\.(jpe?g)$/i.test(f.name) || (f.mimeType && f.mimeType.includes('image/jpeg'))) {
+                const safeFilename = `${sub.studentName.replace(/[\/\\?%*:|"<>]/g, '_')}_${f.name}`;
+                const buffer = await this.downloadFileBuffer(f.id, safeFilename);
+                if (buffer) {
+                  jpegs.push({
+                    filename: safeFilename,
+                    mimeType: 'image/jpeg',
+                    data: buffer,
+                    driveFileId: f.id,
+                    authorName: sub.studentName,
+                  });
+                }
+              }
+            }
+          }
+        } catch (err) {
+          console.error(`⚠️ Failed to collect JPEG attachments from [${att.title}] for ${sub.studentName}:`, err);
         }
       }
     }

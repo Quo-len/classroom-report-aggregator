@@ -1,5 +1,6 @@
 import { google, classroom_v1 } from 'googleapis';
 import { AuthService } from './auth.service';
+import { DriveService } from './drive.service';
 import { env } from '../config/env';
 
 export interface CourseAssignment {
@@ -10,6 +11,8 @@ export interface CourseAssignment {
   deadline: Date | null;
   deadlineFormatted: string;
   daysRemaining: number | null;
+  driveFolderId?: string;
+  driveFolderUrl?: string;
   raw: classroom_v1.Schema$CourseWork;
 }
 
@@ -85,6 +88,53 @@ export class ClassroomService {
         daysRemaining = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
       }
 
+      // Detect linked Google Drive folder in assignment materials or description
+      let driveFolderId: string | undefined = undefined;
+      let driveFolderUrl: string | undefined = undefined;
+
+      // 1. Check attached materials (link or driveFile)
+      if (match.materials) {
+        for (const mat of match.materials) {
+          if (mat.link?.url) {
+            const extractedId = DriveService.extractDriveFolderId(mat.link.url);
+            if (extractedId) {
+              driveFolderId = extractedId;
+              driveFolderUrl = mat.link.url;
+              break;
+            }
+          }
+          if (mat.driveFile?.driveFile) {
+            const df = mat.driveFile.driveFile;
+            const altLink = df.alternateLink || '';
+            const extractedId = DriveService.extractDriveFolderId(altLink) || df.id || undefined;
+            if (extractedId && (altLink.includes('folder') || df.title?.toLowerCase().includes('папк') || df.title?.toLowerCase().includes('додатк'))) {
+              driveFolderId = extractedId;
+              driveFolderUrl = altLink || `https://drive.google.com/drive/folders/${extractedId}`;
+              break;
+            }
+          }
+        }
+      }
+
+      // 2. Check assignment body / description
+      if (!driveFolderId && match.description) {
+        const extractedId = DriveService.extractDriveFolderId(match.description);
+        if (extractedId) {
+          driveFolderId = extractedId;
+          const urlMatch = match.description.match(/https:\/\/drive\.google\.com\/[^\s"')]+/);
+          driveFolderUrl = urlMatch ? urlMatch[0] : `https://drive.google.com/drive/folders/${extractedId}`;
+        }
+      }
+
+      // 3. Fallback to process.env if provided
+      if (!driveFolderId && process.env.ASSIGNMENT_ADDONS_FOLDER_URL) {
+        driveFolderId = DriveService.extractDriveFolderId(process.env.ASSIGNMENT_ADDONS_FOLDER_URL) || undefined;
+        driveFolderUrl = process.env.ASSIGNMENT_ADDONS_FOLDER_URL;
+      } else if (!driveFolderId && process.env.ASSIGNMENT_ADDONS_FOLDER_ID) {
+        driveFolderId = process.env.ASSIGNMENT_ADDONS_FOLDER_ID;
+        driveFolderUrl = `https://drive.google.com/drive/folders/${driveFolderId}`;
+      }
+
       const result: CourseAssignment = {
         id: match.id,
         title: match.title || env.ASSIGNMENT_NAME,
@@ -105,12 +155,17 @@ export class ClassroomService {
             })
           : 'Не встановлено',
         daysRemaining,
+        driveFolderId,
+        driveFolderUrl,
         raw: match,
       };
 
       console.log(`✅ Found assignment: "${result.title}" (ID: ${result.id})`);
       console.log(`   📅 Created on: ${result.creationDateFormatted}`);
       console.log(`   ⏰ Deadline: ${result.deadlineFormatted} (${result.daysRemaining !== null ? result.daysRemaining + ' days left' : 'no deadline'})`);
+      if (result.driveFolderId) {
+        console.log(`   📁 Прикріплена папка Google Drive з додатками: ${result.driveFolderUrl} (ID: ${result.driveFolderId})`);
+      }
 
       return result;
     } catch (error) {
@@ -204,6 +259,14 @@ export class ClassroomService {
                   alternateLink: mat.driveFile.alternateLink || undefined,
                   mimeType: undefined, // Will be resolved if needed
                   driveFile: mat.driveFile,
+                });
+              } else if (mat.link?.url) {
+                const driveFolderId = DriveService.extractDriveFolderId(mat.link.url);
+                attachments.push({
+                  id: driveFolderId || undefined,
+                  title: mat.link.title || 'Посилання на Google Drive',
+                  alternateLink: mat.link.url,
+                  mimeType: driveFolderId ? 'application/vnd.google-apps.folder' : undefined,
                 });
               }
             }

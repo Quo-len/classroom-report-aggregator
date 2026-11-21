@@ -275,3 +275,5 @@ export const OFFICIAL_SECTIONS: OfficialSectionDef[] = [
 export const OFFICIAL_INDICATORS: string[] = OFFICIAL_SECTIONS.flatMap((sec) =>
   sec.subIndicators.map((sub) => `Розділ ${sec.number}. ${sec.title} — ${sub.name}`)
 );
+
+export * from './official-template-rows';

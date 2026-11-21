@@ -83,10 +83,11 @@ export async function runDraftPhase(
 
   // 1. Build and generate preliminary master sheet
   const aggregatedData = await Aggregator.aggregateAll(assignment, submissions, 'Чернетка (T-3)');
-  const masterGrid = Aggregator.buildMasterGrid(aggregatedData);
+  const summaryGrid = Aggregator.buildSummaryGrid(aggregatedData);
+  const detailGrid = Aggregator.buildDetailGrid(aggregatedData);
 
   const sheetTitle = `[ЧЕРНЕТКА Т-3] Зведений звіт кафедри - ${assignment.title} (${new Date().toISOString().split('T')[0]})`;
-  const { spreadsheetId, webViewLink } = await SheetsService.createOrUpdateMasterSheet(sheetTitle, masterGrid);
+  const { spreadsheetId, webViewLink } = await SheetsService.createOrUpdateMasterSheet(sheetTitle, summaryGrid, detailGrid);
 
   logInfo(`Preliminary master sheet generated: ${webViewLink}`);
 
@@ -119,10 +120,11 @@ export async function runReconcilePhase(
 
   const submissions = existingSubmissions || (await ClassroomService.getSubmissions(assignment.id));
   const aggregatedData = await Aggregator.aggregateAll(assignment, submissions, 'Звірення (T-1)');
-  const masterGrid = Aggregator.buildMasterGrid(aggregatedData);
+  const summaryGrid = Aggregator.buildSummaryGrid(aggregatedData);
+  const detailGrid = Aggregator.buildDetailGrid(aggregatedData);
 
   const sheetTitle = `[ЗВІРЕННЯ Т-1] Зведений звіт кафедри - ${assignment.title}`;
-  const { spreadsheetId, webViewLink } = await SheetsService.createOrUpdateMasterSheet(sheetTitle, masterGrid);
+  const { spreadsheetId, webViewLink } = await SheetsService.createOrUpdateMasterSheet(sheetTitle, summaryGrid, detailGrid);
 
   const submittedCount = submissions.filter((s) => s.hasSubmitted).length;
   logInfo(`Reconciled and updated master Google Sheet: ${webViewLink} (${submittedCount}/${submissions.length} submitted)`);
@@ -164,10 +166,11 @@ export async function runFinalPhase(
 
   // 1. Generate final master sheet
   const aggregatedData = await Aggregator.aggregateAll(assignment, submissions, 'Фінальний звіт (Дедлайн)');
-  const masterGrid = Aggregator.buildMasterGrid(aggregatedData);
+  const summaryGrid = Aggregator.buildSummaryGrid(aggregatedData);
+  const detailGrid = Aggregator.buildDetailGrid(aggregatedData);
 
   const sheetTitle = `[ФІНАЛЬНИЙ] Зведений звіт кафедри - ${assignment.title}`;
-  const { spreadsheetId, webViewLink } = await SheetsService.createOrUpdateMasterSheet(sheetTitle, masterGrid);
+  const { spreadsheetId, webViewLink } = await SheetsService.createOrUpdateMasterSheet(sheetTitle, summaryGrid, detailGrid);
 
   // 2. Collect .jpeg attachments
   logInfo('Collecting all .jpeg attachments from teacher submissions...');

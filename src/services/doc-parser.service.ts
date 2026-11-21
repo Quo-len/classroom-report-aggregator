@@ -6,6 +6,15 @@ export interface ParsedDocxResult {
   fullText: string;
 }
 
+export interface DigestedTeacherEvidence {
+  publications: string[];
+  patents: string[];
+  grants: string[];
+  studentsWork: string[];
+  photos: string[];
+  rawNotes: string[];
+}
+
 export class DocParserService {
   /**
    * Helper to convert Excel column letters (e.g. 'A', 'B', 'Z', 'AA') to 0-based index
@@ -78,6 +87,40 @@ export class DocParserService {
     }
 
     return 0;
+  }
+
+  /**
+   * CRITICAL Parser Awareness:
+   * Returns true if a string is a Table caption, Figure caption, Table of Contents (TOC),
+   * metadata line, author attribution, column header, or document boilerplate that must
+   * NEVER be treated as an official scientific indicator in the master report grid.
+   */
+  public static isNonIndicatorOrGarbage(text: string): boolean {
+    if (!text) return true;
+    const trimmed = text.trim();
+    if (trimmed.length < 2) return true;
+
+    const lower = trimmed.toLowerCase();
+
+    // 1. Table captions & column titles
+    if (/^(таблиця|табл\.?|таблица|table)(\s|$|\d|\.)/i.test(lower)) return true;
+    if (/^(№|№\s*п\/?п|п\/п|номер|вихідні дані|назва публікації|бібліографічні дані|тип опублікованого|тип документу|др\.?\s*арк|обсяг|частка автора)(\s|$|:)/i.test(lower)) return true;
+
+    // 2. Figure, picture, illustration, chart, diagram captions
+    if (/^(рис(\.|унок)?|рисунок|мал(\.|юнок)?|малюнок|фото(графія)?|зображення|ілюстрація|схема|діаграма|графік|figure|fig\.|image|picture|photo)(\s|$|\d|\.|\:)/i.test(lower)) return true;
+
+    // 3. Table of contents (TOC) and document structure
+    if (/^(зміст|оглавление|table of contents|toc|перелік розділів|план)(\s|$|\.|\:)/i.test(lower)) return true;
+    if (/^(вступ|висновки|список|джерела|література|додаток|додатки|примітка|примітки)(\s|$|\.|\:)/i.test(lower)) return true;
+
+    // 4. Metadata, signatory, author and administrative labels
+    if (/^(виконавець|автор|співавтор|керівник|п[іi]б|п\.і\.б|посада|науковий ступінь|вчене звання|кафедра|факультет|інститут|університет|дата|рік|підпис|телефон|мобільний|стаціонарний|електронна адреса|email|e-mail)(\s|$|\.|\:)/i.test(lower)) return true;
+    if (/^(вказати інформацію|обов'язково|обов’язково|за календарний|звітний період|звіт про|інформація про)(\s|$|\.|\:|\!)/i.test(lower)) return true;
+
+    // 5. Bare column numberings or symbols
+    if (/^[\d\s\.,;:/\-–—\(\)]+$/.test(trimmed)) return true;
+
+    return false;
   }
 
   /**
@@ -259,6 +302,17 @@ export class DocParserService {
         }
       }
 
+      // Also check paragraphs (e.g. numbered list of teachers)
+      for (const p of parsed.paragraphs) {
+        if (/^\d+[\.\)]\s+([А-ЯІЇЄ][а-яіїє\']+\s+[А-ЯІЇЄ]\.?\s*[А-ЯІЇЄ]\.?|[А-ЯІЇЄ][а-яіїє\']+\s+[А-ЯІЇЄ][а-яіїє\']+\s+[А-ЯІЇЄ][а-яіїє\']+)/.test(p)) {
+          totalStaff++;
+          const pLower = p.toLowerCase();
+          if (pLower.includes('штатн')) fullTime++;
+          if (pLower.includes('докт.') || pLower.includes('д.т.н') || pLower.includes('доктор наук') || pLower.includes('професор')) doctors++;
+          if (pLower.includes('канд.') || pLower.includes('к.т.н') || pLower.includes('к.ф.-м.н') || pLower.includes('філософії') || pLower.includes('phd') || pLower.includes('доцент')) candidates++;
+        }
+      }
+
       if (totalStaff > 0) metrics.set('Розділ 1. Кількісний та якісний склад професорсько-викладацьких кадрів — всього', totalStaff);
       if (fullTime > 0) metrics.set('Розділ 1. Кількісний та якісний склад професорсько-викладацьких кадрів — із них - штатних викладачів', fullTime);
       if (doctors > 0) metrics.set('Розділ 1. Кількісний та якісний склад професорсько-викладацьких кадрів — докт.н.', doctors);
@@ -277,6 +331,7 @@ export class DocParserService {
       let theses = 0;
       let printedSheets = 0;
 
+      // 1. Parse tables
       for (const tbl of parsed.tables) {
         for (let r = 1; r < tbl.length; r++) {
           const row = tbl[r];
@@ -300,6 +355,27 @@ export class DocParserService {
         }
       }
 
+      // 2. Also parse numbered publication paragraphs (e.g., "1. Author ... // Journal ...")
+      for (const p of parsed.paragraphs) {
+        const trimmed = p.trim();
+        if (/^\d+[\.\)]\s+/.test(trimmed) && (trimmed.includes('//') || trimmed.includes('№') || trimmed.includes('Vol.') || trimmed.includes('С.') || trimmed.includes('P.'))) {
+          const pLower = trimmed.toLowerCase();
+          if (pLower.includes('монограф')) monographs++;
+          else if (pLower.includes('підручник')) textbooks++;
+          else if (pLower.includes('посібник')) manuals++;
+          else if (pLower.includes('тези') || pLower.includes('конференц')) theses++;
+          else fakhoviArticles++;
+
+          if (pLower.includes('scopus')) scopusArticles++;
+          if (pLower.includes('wos') || pLower.includes('web of science')) wosArticles++;
+
+          const sheetMatch = trimmed.match(/(\d+(?:[.,]\d+)?)\s*др\.?\s*арк/i);
+          if (sheetMatch) {
+            printedSheets += this.parseNumber(sheetMatch[1]);
+          }
+        }
+      }
+
       if (monographs > 0) metrics.set('Розділ 3. Публікації (к-сть публікацій / к-сть др. аркушів) — монографії', monographs);
       if (textbooks > 0) metrics.set('Розділ 3. Публікації (к-сть публікацій / к-сть др. аркушів) — підручники', textbooks);
       if (manuals > 0) metrics.set('Розділ 3. Публікації (к-сть публікацій / к-сть др. аркушів) — посібники', manuals);
@@ -313,15 +389,25 @@ export class DocParserService {
     }
 
     // Specialize for Додаток 10 (Patents and licenses)
-    if (lowerName.includes('додаток_10') || lowerName.includes('додаток 10') || parsed.fullText.includes('авторські свідоцтва, патенти')) {
+    if (lowerName.includes('додаток_10') || lowerName.includes('додаток 10') || parsed.fullText.includes('авторські свідоцтва, патенти') || parsed.fullText.includes('патент на корисну модель')) {
       let count = 0;
       for (const tbl of parsed.tables) {
         for (let r = 1; r < tbl.length; r++) {
           const row = tbl[r];
+          const rowText = row.join(' ').toLowerCase();
+          if (this.parseNumber(rowText) === 0 && (rowText.includes('відсутн') || rowText.includes('немає') || rowText.includes('-'))) continue;
           if (row.some((c) => c.trim().length > 2)) count++;
         }
       }
-      metrics.set('Розділ 10. Інформація про авторські свідоцтва, патенти, ліцензії, отримані в 2026 р. — вказати кількість', count);
+      for (const p of parsed.paragraphs) {
+        const trimmed = p.trim();
+        if (/^\d+[\.\)]\s+.*(патент|корисну модель|авторськ)/i.test(trimmed)) {
+          count++;
+        }
+      }
+      if (count > 0) {
+        metrics.set('Розділ 10. Інформація про авторські свідоцтва, патенти, ліцензії, отримані в 2026 р. — вказати кількість', count);
+      }
       return metrics;
     }
 
@@ -331,10 +417,23 @@ export class DocParserService {
       for (const tbl of parsed.tables) {
         for (let r = 1; r < tbl.length; r++) {
           const row = tbl[r];
-          if (row.some((c) => c.trim().length > 2)) count++;
+          // Skip header row repeats or column index rows
+          if (row.length > 2 && /^[1-9]$/.test(row[0].trim()) && /^[1-9]$/.test(row[1].trim())) continue;
+          const rowText = row.join(' ').toLowerCase();
+          if (rowText.includes('відсутн') || rowText.includes('немає') || rowText.includes('інформація відсутня')) continue;
+          // Only count if row has substantive grant details
+          if (row.some((c) => c.trim().length > 3 && !/^\d+$/.test(c.trim()))) count++;
         }
       }
-      metrics.set('Розділ 18. Кількість грантів від міжнародних фондів та міжнародних проєктів — кількість міжнародних проєктів з участю науковців', count);
+      for (const p of parsed.paragraphs) {
+        const trimmed = p.trim();
+        if (/^\d+[\.\)]\s+.*(грант|horizon|європа|проєкт|фонд)/i.test(trimmed)) {
+          count++;
+        }
+      }
+      if (count > 0) {
+        metrics.set('Розділ 18. Кількість грантів від міжнародних фондів та міжнародних проєктів — кількість міжнародних проєктів з участю науковців', count);
+      }
       return metrics;
     }
 
@@ -343,7 +442,7 @@ export class DocParserService {
       for (const row of tbl) {
         if (!row || row.length < 2) continue;
         const indName = row[0].trim();
-        if (!indName || /^(№|показник|п\/п|номер)/i.test(indName)) continue;
+        if (this.isNonIndicatorOrGarbage(indName)) continue;
 
         for (let c = 1; c < row.length; c++) {
           const val = row[c];
@@ -359,16 +458,69 @@ export class DocParserService {
 
     // Generic paragraph text parsing: "Показник: 5" or "Scopus - 2"
     for (const line of parsed.paragraphs) {
+      if (this.isNonIndicatorOrGarbage(line)) continue;
+
       const match = line.match(/^([^:\-\t–]+)[:\t–\-]\s*(.+)$/);
       if (match) {
         const ind = match[1].trim();
+        if (this.isNonIndicatorOrGarbage(ind)) continue;
+
         const raw = match[2].trim();
         const num = this.parseNumber(raw);
-        const current = metrics.get(ind) || 0;
-        metrics.set(ind, current + num);
+        if (num > 0) {
+          const current = metrics.get(ind) || 0;
+          metrics.set(ind, current + num);
+        }
       }
     }
 
     return metrics;
+  }
+
+  /**
+   * Extracts qualitative evidence (titles of papers, journals, patents, grants, students achievements)
+   * from a teacher's report text or docx buffer to feed into Groq AI.
+   */
+  public static extractQualitativeEvidence(fullText: string, paragraphs: string[], filename: string): Partial<DigestedTeacherEvidence> {
+    const evidence: Partial<DigestedTeacherEvidence> = {
+      publications: [],
+      patents: [],
+      grants: [],
+      studentsWork: [],
+      rawNotes: [],
+    };
+
+    const lines = paragraphs.length > 0 ? paragraphs : fullText.split(/\r?\n/);
+
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line || line.length < 5) continue;
+      if (this.isNonIndicatorOrGarbage(line)) continue;
+
+      const lower = line.toLowerCase();
+
+      // Publications
+      if (
+        (line.includes('//') || lower.includes('scopus') || lower.includes('wos') || lower.includes('фахов') || lower.includes('монограф') || lower.includes('стаття') || lower.includes('тези')) &&
+        !lower.startsWith('список') &&
+        !lower.startsWith('додаток')
+      ) {
+        evidence.publications?.push(line.replace(/^\d+[\.\)]\s*/, ''));
+      }
+      // Patents
+      else if (lower.includes('патент') || lower.includes('корисн') || lower.includes('авторськ')) {
+        evidence.patents?.push(line.replace(/^\d+[\.\)]\s*/, ''));
+      }
+      // Grants & Projects
+      else if (lower.includes('грант') || lower.includes('horizon') || lower.includes('європа') || lower.includes('нфду') || lower.includes('erasmus')) {
+        evidence.grants?.push(line.replace(/^\d+[\.\)]\s*/, ''));
+      }
+      // Students
+      else if (lower.includes('студент') || lower.includes('олімпіад') || lower.includes('керував') || lower.includes('конкурс')) {
+        evidence.studentsWork?.push(line.replace(/^\d+[\.\)]\s*/, ''));
+      }
+    }
+
+    return evidence;
   }
 }
