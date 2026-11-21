@@ -151,6 +151,22 @@ export class DriveService {
     }
   }
 
+  /** Exports Google Docs as Word so the existing parser can read tables. */
+  public static async exportDocAsDocx(fileId: string): Promise<Buffer | null> {
+    try {
+      const drive = await this.getClient();
+      console.log(`Exporting Google Doc [${fileId}] as DOCX...`);
+      const res = await drive.files.export(
+        { fileId, mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
+        { responseType: 'arraybuffer' }
+      );
+      return Buffer.from(res.data as ArrayBuffer);
+    } catch (error) {
+      console.error(`Failed to export Google Doc [${fileId}] as DOCX:`, error);
+      return null;
+    }
+  }
+
   /**
    * Exports a Google Docs file as plain text
    */

@@ -81,6 +81,13 @@ export class Aggregator {
       mimeType: string,
       buffer?: Buffer
     ): Promise<void> => {
+      if (mimeType === 'application/vnd.google-apps.document' && fileId && !buffer) {
+        const docBuffer = await DriveService.exportDocAsDocx(fileId);
+        if (docBuffer) {
+          await processSingleFile(fileId, title, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', docBuffer);
+          return;
+        }
+      }
       const lowerTitle = title.toLowerCase();
 
       // Check author surname in filename (e.g. Додаток_1_Монографії_Петренко.docx -> Петренко)
@@ -305,6 +312,13 @@ export class Aggregator {
         mimeType: string,
         buffer?: Buffer
       ): Promise<void> => {
+        if (mimeType === 'application/vnd.google-apps.document' && fileId && !buffer) {
+          const docBuffer = await DriveService.exportDocAsDocx(fileId);
+          if (docBuffer) {
+            await processAddonFile(fileId, title, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', docBuffer);
+            return;
+          }
+        }
         const lowerTitle = title.toLowerCase();
 
         // 1. Image files (.jpeg, .jpg)

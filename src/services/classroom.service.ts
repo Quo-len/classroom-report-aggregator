@@ -261,12 +261,13 @@ export class ClassroomService {
                   driveFile: mat.driveFile,
                 });
               } else if (mat.link?.url) {
+                const googleDocId = mat.link.url.match(/^https:\/\/docs\.google\.com\/document\/(?:u\/\d+\/)?d\/([a-zA-Z0-9_-]+)/i)?.[1];
                 const driveFolderId = DriveService.extractDriveFolderId(mat.link.url);
                 attachments.push({
-                  id: driveFolderId || undefined,
+                  id: googleDocId || driveFolderId || undefined,
                   title: mat.link.title || 'Посилання на Google Drive',
                   alternateLink: mat.link.url,
-                  mimeType: driveFolderId ? 'application/vnd.google-apps.folder' : undefined,
+                  mimeType: googleDocId ? 'application/vnd.google-apps.document' : driveFolderId ? 'application/vnd.google-apps.folder' : undefined,
                 });
               }
             }
