@@ -2,7 +2,6 @@ import path from 'path';
 import { SheetsService } from '../services/sheets.service';
 import { DriveService } from '../services/drive.service';
 import { DocParserService, DigestedTeacherEvidence } from '../services/doc-parser.service';
-import { AIService } from '../services/ai.service';
 import { CourseAssignment, StudentSubmissionItem } from '../services/classroom.service';
 import { OFFICIAL_INDICATORS, OFFICIAL_SECTIONS, OFFICIAL_TEMPLATE_ROWS } from '../config/official-template';
 import { env } from '../config/env';
@@ -125,16 +124,6 @@ export class Aggregator {
           if (qual.grants) reportData.evidence?.grants?.push(...qual.grants);
           if (qual.studentsWork) reportData.evidence?.studentsWork?.push(...qual.studentsWork);
 
-          if (extracted.size === 0 && parsedDoc.fullText.length > 50 && AIService.isAvailable()) {
-            console.log(`🤖 [${submission.studentName}] Groq AI аналіз описового звіту: ${title}...`);
-            const aiExtracted = await AIService.extractMetricsFromText(parsedDoc.fullText, submission.studentName);
-            for (const [ind, val] of aiExtracted.entries()) {
-              if (!DocParserService.isNonIndicatorOrGarbage(ind)) {
-                const current = reportData.metrics.get(ind) || 0;
-                reportData.metrics.set(ind, current + val);
-              }
-            }
-          }
           processedFileNames.push(title);
         }
         return;
@@ -605,22 +594,23 @@ export class Aggregator {
       console.error(`⚠️ Failed to load static scientific plan rows:`, err);
     }
 
-    // 6. Generate AI Executive Summary with digested document awareness
+    // 6. Summarize parsed totals and submission status without external AI calls.
     const missingList = teachersData.filter((t) => !t.hasSubmitted).map((t) => t.studentName);
     const submittedCount = teachersData.filter((t) => t.hasSubmitted).length;
-    const collectedEvidence: DigestedTeacherEvidence[] = teachersData
-      .map((t) => t.evidence as DigestedTeacherEvidence)
-      .filter(Boolean);
-
-    const aiSummary = await AIService.generateExecutiveSummary({
-      assignmentTitle: assignment.title,
-      totalSubmitted: submittedCount,
-      totalTeachers: teachersData.length,
-      missingTeachers: missingList,
-      totalsByIndicator,
-      statusLabel,
-      digestedEvidence: collectedEvidence,
-    });
+    const highlights = Array.from(totalsByIndicator.entries())
+      .filter(([, value]) => value !== 0)
+      .map(([indicator, value]) => `${indicator}: ${value}`);
+    // Keep the existing field name for consumers of the report data.
+    const aiSummary = [
+      `Зведений звіт за напрямом «${assignment.title}» (статус: ${statusLabel}).`,
+      `Подано ${submittedCount} з ${teachersData.length} звітів.`,
+      highlights.length > 0
+        ? `Показники кафедри: ${highlights.join('; ')}.`
+        : 'Ненульових числових показників не виявлено.',
+      missingList.length > 0
+        ? `Не подали звіти: ${missingList.join(', ')}.`
+        : 'Немає викладачів, які очікують на подання звіту.',
+    ].join(' ');
 
     return {
       assignment,
@@ -864,7 +854,7 @@ export class Aggregator {
 
     if (data.aiSummary) {
       grid.push([]);
-      grid.push(['АНАЛІТИЧНЕ РЕЗЮМЕ ДЛЯ НАУКОВОЇ ЧАСТИНИ ТА ЗАВІДУВАЧА КАФЕДРИ (AI Executive Summary)']);
+      grid.push(['АНАЛІТИЧНЕ РЕЗЮМЕ ДЛЯ НАУКОВОЇ ЧАСТИНИ ТА ЗАВІДУВАЧА КАФЕДРИ']);
       grid.push(['', data.aiSummary]);
     }
 

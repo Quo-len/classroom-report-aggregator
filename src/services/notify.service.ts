@@ -195,7 +195,7 @@ export class NotifyService {
       : 'Усі викладачі вчасно подали звіти!';
 
     const summarySection = aiSummary
-      ? `\n\n<b>🤖 ШІ-Резюме кафедри (AI Executive Summary):</b>\n<i>${aiSummary}</i>`
+      ? `\n\n<b>Резюме кафедри:</b>\n<i>${aiSummary}</i>`
       : '';
 
     // Telegram message
@@ -219,7 +219,7 @@ ${summarySection}
       <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
         <h2 style="color: #2c3e50;">Попередній звіт про стан подання наукових звітів (Т-3 дні)</h2>
         <p>Завдання: <strong>«${env.ASSIGNMENT_NAME}»</strong></p>
-        ${aiSummary ? `<div style="background-color: #e8f4f8; padding: 12px; border-left: 4px solid #2980b9; margin: 15px 0;"><strong>🤖 Аналітичне резюме (Groq AI):</strong><br/>${aiSummary}</div>` : ''}
+        ${aiSummary ? `<div style="background-color: #e8f4f8; padding: 12px; border-left: 4px solid #2980b9; margin: 15px 0;"><strong>Аналітичне резюме:</strong><br/>${aiSummary}</div>` : ''}
         <p>Сформовано попередній зведений Google Sheet на основі наявних на цей момент матеріалів:</p>
         <p><a href="${preliminarySheetUrl}" style="background-color: #2980b9; color: white; padding: 10px 18px; text-decoration: none; border-radius: 4px; display: inline-block;">Відкрити попередній зведений звіт</a></p>
         <h3 style="color: #c0392b;">Список викладачів, які ще не подали звіт (${missingTeachers.length} осіб):</h3>
@@ -253,7 +253,7 @@ ${summarySection}
       <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
         <h2 style="color: #27ae60;">🎓 Фінальний зведений звіт про науково-дослідну роботу кафедри</h2>
         <p>Термін здачі звітів вичерпано. Звіт сформовано та агреговано автоматичною системою кафедри.</p>
-        ${aiSummary ? `<div style="background-color: #eafaf1; padding: 12px; border-left: 4px solid #27ae60; margin: 15px 0;"><strong>🤖 Підсумкове резюме (Groq AI):</strong><br/>${aiSummary}</div>` : ''}
+        ${aiSummary ? `<div style="background-color: #eafaf1; padding: 12px; border-left: 4px solid #27ae60; margin: 15px 0;"><strong>Підсумкове резюме:</strong><br/>${aiSummary}</div>` : ''}
         <ul>
           <li><strong>Назва завдання:</strong> «${env.ASSIGNMENT_NAME}»</li>
           <li><strong>Подано звітів:</strong> ${totalSubmitted} з ${totalEnrolled} викладачів</li>
@@ -278,7 +278,7 @@ ${summarySection}
     });
 
     const summarySection = aiSummary
-      ? `\n\n<b>🤖 Підсумкове резюме:</b>\n<i>${aiSummary}</i>`
+      ? `\n\n<b>Підсумкове резюме:</b>\n<i>${aiSummary}</i>`
       : '';
 
     // Notify Head of Dept on Telegram

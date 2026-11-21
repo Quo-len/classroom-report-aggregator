@@ -135,7 +135,7 @@ export async function runReconcilePhase(
 <b>Завдання:</b> ${assignment.title}
 <b>Подано звітів:</b> ${submittedCount} з ${submissions.length} викладачів
 <b>Оновлений звіт:</b> <a href="${webViewLink}">Переглянути оновлений звіт</a>
-${aggregatedData.aiSummary ? `\n\n<b>🤖 ШІ-Резюме:</b>\n<i>${aggregatedData.aiSummary}</i>` : ''}
+${aggregatedData.aiSummary ? `\n\n<b>Резюме:</b>\n<i>${aggregatedData.aiSummary}</i>` : ''}
   `.trim();
   await NotifyService.sendTelegramMessage(tgMsg);
 
