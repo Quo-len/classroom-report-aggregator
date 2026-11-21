@@ -26,7 +26,7 @@ function logError(message: string, error?: any): void {
  */
 async function runAuthInit(): Promise<void> {
   console.log('🚀 Running Google OAuth2 Authorization Initialization...');
-  await AuthService.getAuthClient();
+  await AuthService.getAuthClient(true);
   console.log('✅ Google Auth initialization completed successfully.');
 }
 
