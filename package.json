@@ -7,6 +7,12 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "serve": "tsx src/server.ts",
+    "start:web": "node dist/server.js",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "schedule:setup": "tsx scripts/configure-schedule.ts",
+    "delivery:review": "tsx scripts/review-delivery.ts",
+    "test:hosted": "tsx test/test-account-context.ts && tsx test/test-hosted.ts",
+    "test:browser": "tsx test/test-browser.ts",
     "dev": "tsx src/index.ts",
     "test": "tsx test/test-aggregator.ts && tsx test/test-doc-parser.ts && tsx test/test-ai-service.ts",
     "test:manual": "tsx test/manual-test.ts",
@@ -39,8 +45,10 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.6.0",
     "@types/node": "^22.13.0",
     "@types/pg": "^8.23.1",
+    "playwright": "^1.65.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3"
   }
