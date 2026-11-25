@@ -6,6 +6,7 @@ import { spawn } from 'child_process';
 import { google } from 'googleapis';
 import { OAuth2Client, CodeChallengeMethod } from 'google-auth-library';
 import '../config/env'; // Load .env without requiring unrelated report settings for sign-in.
+import { accountContext } from '../core/account-context';
 
 export const SCOPES = [
   'https://www.googleapis.com/auth/classroom.courses.readonly',
@@ -30,6 +31,9 @@ export class AuthService {
    * Returns an authorized Google Auth client (OAuth2Client or ServiceAccount)
    */
   public static async getAuthClient(forceConsent = false): Promise<any> {
+    const account = accountContext.getStore();
+    if (account) return account.auth;
+    if (process.env.DATABASE_URL) throw new Error('Select an authenticated account before accessing Google.');
     if (this.cachedClient && !forceConsent) {
       return this.cachedClient;
     }

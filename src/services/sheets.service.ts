@@ -5,14 +5,9 @@ import { env } from '../config/env';
 import { TEMPLATE_MERGES } from '../config/official-template';
 
 export class SheetsService {
-  private static sheetsApi: sheets_v4.Sheets | null = null;
-
   private static async getClient(): Promise<sheets_v4.Sheets> {
-    if (!this.sheetsApi) {
-      const auth = await AuthService.getAuthClient();
-      this.sheetsApi = google.sheets({ version: 'v4', auth });
-    }
-    return this.sheetsApi;
+    const auth = await AuthService.getAuthClient();
+    return google.sheets({ version: 'v4', auth });
   }
 
   /**

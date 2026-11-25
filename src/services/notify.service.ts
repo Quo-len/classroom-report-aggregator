@@ -1,3 +1,4 @@
+import { accountContext } from '../core/account-context';
 import { google, gmail_v1 } from 'googleapis';
 import { Telegraf } from 'telegraf';
 import { AuthService } from './auth.service';
@@ -12,23 +13,23 @@ export interface EmailOptions {
 }
 
 export class NotifyService {
-  public static dryRun: boolean = false;
-  private static gmailApi: gmail_v1.Gmail | null = null;
-  private static bot: Telegraf | null = null;
+  private static cliDryRun = false;
+  public static get dryRun(): boolean {
+    return accountContext.getStore()?.dryRun ?? this.cliDryRun;
+  }
+  public static set dryRun(value: boolean) {
+    const account = accountContext.getStore();
+    if (account) account.dryRun = value;
+    else this.cliDryRun = value;
+  }
 
   private static async getGmail(): Promise<gmail_v1.Gmail> {
-    if (!this.gmailApi) {
-      const auth = await AuthService.getAuthClient();
-      this.gmailApi = google.gmail({ version: 'v1', auth });
-    }
-    return this.gmailApi;
+    const auth = await AuthService.getAuthClient();
+    return google.gmail({ version: 'v1', auth });
   }
 
   private static getTelegramBot(): Telegraf {
-    if (!this.bot) {
-      this.bot = new Telegraf(env.TELEGRAM_BOT_TOKEN);
-    }
-    return this.bot;
+    return new Telegraf(env.TELEGRAM_BOT_TOKEN);
   }
 
   /**

@@ -1,6 +1,7 @@
 import path from 'path';
 import dotenv from 'dotenv';
 import { z } from 'zod';
+import { accountContext } from '../core/account-context';
 
 // Load .env from project root
 dotenv.config({ path: path.resolve(process.cwd(), '.env') });
@@ -55,6 +56,11 @@ export function getEnv(): z.infer<typeof envSchema> & { credentialsPath: string;
 // Proxy export for transparent usage: env.VARIABLE_NAME
 export const env = new Proxy({} as ReturnType<typeof getEnv>, {
   get(_target, prop: string) {
+    const account = accountContext.getStore();
+    if (account) {
+      if (prop === 'TELEGRAM_BOT_TOKEN' || prop === 'GROQ_API_KEY') return process.env[prop];
+      return account.settings[prop];
+    }
     const config = getEnv();
     return (config as any)[prop];
   },

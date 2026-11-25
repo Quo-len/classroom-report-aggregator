@@ -34,14 +34,9 @@ export interface StudentSubmissionItem {
 }
 
 export class ClassroomService {
-  private static classroomApi: classroom_v1.Classroom | null = null;
-
   private static async getClient(): Promise<classroom_v1.Classroom> {
-    if (!this.classroomApi) {
-      const auth = await AuthService.getAuthClient();
-      this.classroomApi = google.classroom({ version: 'v1', auth });
-    }
-    return this.classroomApi;
+    const auth = await AuthService.getAuthClient();
+    return google.classroom({ version: 'v1', auth });
   }
 
   /**

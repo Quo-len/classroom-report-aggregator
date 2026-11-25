@@ -20,14 +20,9 @@ export interface DownloadedAsset {
 }
 
 export class DriveService {
-  private static driveApi: drive_v3.Drive | null = null;
-
   private static async getClient(): Promise<drive_v3.Drive> {
-    if (!this.driveApi) {
-      const auth = await AuthService.getAuthClient();
-      this.driveApi = google.drive({ version: 'v3', auth });
-    }
-    return this.driveApi;
+    const auth = await AuthService.getAuthClient();
+    return google.drive({ version: 'v3', auth });
   }
 
   /**
