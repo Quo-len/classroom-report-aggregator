@@ -1,7 +1,9 @@
 import { accountContext } from '../core/account-context';
+import { UserError } from './api-error';
 import { withAccount } from './account.service';
 import { database, withAccountLock } from './database.service';
 import { ClassroomService } from './classroom.service';
+import { WorkspaceService } from './workspace.service';
 import { runDraftPhase, runReconcilePhase, runFinalPhase } from '../index';
 
 export type Phase = 'monitor' | 'draft' | 'reconcile' | 'final' | 'auto';
@@ -16,8 +18,10 @@ export function phaseForDays(days: number | null): Exclude<Phase, 'auto'> {
 export async function executeWorkflow(userId: string, requested: Phase, dryRun = false) {
   return withAccountLock(userId, () => withAccount(userId, async () => {
     const context = accountContext.getStore()!;
+    // Re-validates the Drive workspace each run so trashed folders or sheets are recreated before reporting.
+    await WorkspaceService.ensure({ drive: true });
     const assignment = await ClassroomService.getTargetAssignment();
-    if (!assignment) throw Object.assign(new Error('Assignment not found'), { statusCode: 404 });
+    if (!assignment) throw new UserError(`Завдання «${context.settings.ASSIGNMENT_NAME}» не знайдено в обраному курсі.`, 404);
     const phase = requested === 'auto' ? phaseForDays(assignment.daysRemaining) : requested;
     if (phase === 'monitor') return { ok: true, message: 'Перевірку завершено. Звіт за розкладом ще не потрібний.' };
     context.assignmentId = assignment.id;

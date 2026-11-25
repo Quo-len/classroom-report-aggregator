@@ -17,6 +17,8 @@ import { SheetsService } from '../src/services/sheets.service';
 import { NotifyService } from '../src/services/notify.service';
 import { SCOPES } from '../src/services/auth.service';
 import { google } from 'googleapis';
+import { WorkspaceService } from '../src/services/workspace.service';
+import { UserError } from '../src/services/api-error';
 
 // All queries go to this disposable PostgreSQL engine, never the developer's database.
 Object.assign(process.env, {
@@ -117,6 +119,51 @@ async function main() {
     assert.deepEqual(audit.map((event: any) => event.detail.to), ['editor', 'admin', 'disabled']);
     console.log('PASS: role permissions, default-deny API routes, admin user management, audit log and session revocation');
 
+    const workspaceOriginals = { resolve: WorkspaceService.resolveCourse, provision: WorkspaceService.provision };
+    const provisionedFor: string[] = [];
+    WorkspaceService.resolveCourse = async (_auth, name) => {
+      if (name === 'Невідомий') throw new UserError('Курс «Невідомий» не знайдено.');
+      return { id: 'resolved-course', name: 'Кафедра інформатики' };
+    };
+    WorkspaceService.provision = async (_auth, owner) => {
+      provisionedFor.push(owner);
+      return { rootFolderId: `${owner}-root`, reportsFolderId: `${owner}-reports`, planSheetId: `${owner}-plan`, sciPlanSheetId: `${owner}-sci` };
+    };
+    try {
+      const base = { HEAD_OF_DEPT_EMAIL: 'head@example.com', SCI_DEPT_EMAIL: 'sci@example.com' };
+      const put = (settings: unknown) => server!.inject({ method: 'PUT', url: '/api/settings', headers, payload: { settings, automationEnabled: true } });
+      assert.equal((await put({ ...base, STATIC_PLAN_SHEET_ID: 'hardcoded' })).statusCode, 400, 'hardcoded resource ids are rejected');
+      const unknown = await put({ ...base, COURSE_NAME: 'Невідомий' });
+      assert.equal(unknown.statusCode, 400);
+      assert.match(unknown.json().error, /не знайдено/);
+      const saved = await put({ ...base, COURSE_NAME: 'інформатики' });
+      assert.equal(saved.statusCode, 200);
+      assert.equal(saved.json().settings.ASSIGNMENT_NAME, 'Інформація про науково-дослідну роботу', 'assignment name defaults from env');
+      assert.equal(saved.json().workspace.planSheetUrl, `https://docs.google.com/spreadsheets/d/${alice}-plan/edit`);
+      assert.deepEqual(provisionedFor, [alice], 'resources are provisioned with the account id as owner key');
+      const renamed = await put({ ...base, COURSE_NAME: 'інформатики', ASSIGNMENT_NAME: 'Звіт за семестр', HEAD_OF_DEPT_EMAIL: 'new-head@example.com' });
+      assert.equal(renamed.json().settings.ASSIGNMENT_NAME, 'Звіт за семестр');
+      const aliceMe = (await server.inject({ url: '/api/me', headers })).json();
+      assert.equal(aliceMe.course.name, 'Кафедра інформатики');
+      assert.equal(aliceMe.settings.HEAD_OF_DEPT_EMAIL, 'new-head@example.com');
+      assert.equal(aliceMe.defaults.HEAD_OF_DEPT_EMAIL, 'alice@example.com');
+      assert.equal(aliceMe.workspace.rootFolderUrl, `https://drive.google.com/drive/folders/${alice}-root`);
+      await withAccount(alice, async () => {
+        const settings = accountContext.getStore()!.settings;
+        assert.equal(settings.CLASSROOM_COURSE_ID, 'resolved-course');
+        assert.equal(settings.STATIC_SCI_PLAN_SHEET_ID, `${alice}-sci`);
+        assert.equal(settings.MASTER_OUTPUT_FOLDER_ID, `${alice}-reports`);
+      });
+      assert.equal((await query('SELECT * FROM bird.workspaces')).rows.length, 1, 'only the saving account has a workspace');
+      await assert.rejects(query("INSERT INTO bird.workspaces (user_id, plan_sheet_id) VALUES ($1, $2)", [bob, `${alice}-plan`]));
+    } finally {
+      WorkspaceService.resolveCourse = workspaceOriginals.resolve; WorkspaceService.provision = workspaceOriginals.provision;
+    }
+    // Restore the legacy fixture so later workflow tests keep their original course.
+    await query('DELETE FROM bird.workspaces WHERE user_id = $1', [alice]);
+    await query('UPDATE bird.settings SET value = $2, automation_enabled = false WHERE user_id = $1', [alice, { CLASSROOM_COURSE_ID: 'alice-course' }]);
+    console.log('PASS: settings resolve the course by name, provision a per-account workspace and default the assignment name');
+
     const login = await server.inject('/auth/login');
     const location = new URL(login.headers.location!);
     assert.equal(location.searchParams.get('code_challenge_method'), 'S256');
@@ -160,8 +207,10 @@ async function main() {
 
     const originals = { assignment: ClassroomService.getTargetAssignment, submissions: ClassroomService.getSubmissions,
       aggregate: Aggregator.aggregateAll, summary: Aggregator.buildSummaryGrid, detail: Aggregator.buildDetailGrid,
-      sheet: SheetsService.createOrUpdateMasterSheet, remind: NotifyService.sendMissingTeachersReminder, head: NotifyService.notifyHeadOfDeptMissingList };
-    let reports = 0;
+      sheet: SheetsService.createOrUpdateMasterSheet, remind: NotifyService.sendMissingTeachersReminder, head: NotifyService.notifyHeadOfDeptMissingList,
+      ensure: WorkspaceService.ensure };
+    let reports = 0, ensured = 0;
+    WorkspaceService.ensure = async () => { ensured++; return { course: { id: 'alice-course', name: 'Alice' }, workspace: {} }; };
     ClassroomService.getTargetAssignment = async () => ({ id: 'workflow-assignment', daysRemaining: 3, title: 'Test' } as any);
     ClassroomService.getSubmissions = async () => [];
     Aggregator.aggregateAll = async () => ({} as any);
@@ -174,12 +223,14 @@ async function main() {
       await executeWorkflow(alice, 'auto');
       await executeWorkflow(alice, 'auto');
       assert.equal(reports, 1);
+      assert.equal(ensured, 2, 'every workflow run validates the Drive workspace');
       await withAccount(alice, async () => assert.equal(accountContext.getStore()!.settings.CLASSROOM_COURSE_ID, 'alice-course'));
       await assert.rejects(withAccount(bob, async () => {}));
     } finally {
       ClassroomService.getTargetAssignment = originals.assignment; ClassroomService.getSubmissions = originals.submissions;
       Aggregator.aggregateAll = originals.aggregate; Aggregator.buildSummaryGrid = originals.summary; Aggregator.buildDetailGrid = originals.detail;
       SheetsService.createOrUpdateMasterSheet = originals.sheet; NotifyService.sendMissingTeachersReminder = originals.remind; NotifyService.notifyHeadOfDeptMissingList = originals.head;
+      WorkspaceService.ensure = originals.ensure;
     }
     console.log('PASS: Kyiv deadline phases and persistent automatic-workflow deduplication');
 

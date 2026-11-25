@@ -12,6 +12,8 @@ import { registerSettings } from './services/settings.service';
 import { executeWorkflow, runScheduledAccounts, Phase } from './services/workflow.service';
 import { timingSafeEqual } from 'crypto';
 import { can, permissionsFor, registerAdmin } from './services/rbac.service';
+import { UserError } from './services/api-error';
+import { defaultAssignmentName, workspaceLinks, WorkspaceService } from './services/workspace.service';
 
 // Routes every signed-in account may reach; every other /api route must declare a permission.
 const SESSION_ROUTES = new Set(['GET /api/me', 'POST /api/logout']);
@@ -46,6 +48,7 @@ export async function createServer(): Promise<FastifyInstance> {
     }
   });
   server.setErrorHandler((error, request, reply) => {
+    if (error instanceof UserError) return reply.code(error.statusCode).send({ error: error.message });
     const failure = error as { code?: string; statusCode?: number };
     server.log.error({ code: failure.code || 'REQUEST_FAILED', route: request.routeOptions.url }, 'Request failed');
     reply.code(failure.statusCode && failure.statusCode < 500 ? failure.statusCode : 500)
@@ -60,9 +63,12 @@ export async function createServer(): Promise<FastifyInstance> {
     const session = request.accountSession;
     if (!session) return { user: null };
     const settings = await database().query('SELECT value, automation_enabled FROM bird.settings WHERE user_id = $1', [session.user_id]);
+    const { course, workspace } = await WorkspaceService.load(session.user_id);
     return { user: { name: session.name, email: session.email, connected: session.connected, role: session.role,
       permissions: permissionsFor(session.role) }, csrfToken: session.csrf_token,
-      settings: settings.rows[0]?.value || null, automationEnabled: settings.rows[0]?.automation_enabled || false };
+      settings: settings.rows[0]?.value || null, automationEnabled: settings.rows[0]?.automation_enabled || false,
+      course: course || null, workspace: workspaceLinks(workspace),
+      defaults: { ASSIGNMENT_NAME: defaultAssignmentName(), HEAD_OF_DEPT_EMAIL: session.email, WORKSPACE_FOLDER_NAME: WorkspaceService.rootFolderName() } };
   });
   server.get('/api/runs', { config: { permission: 'report:read' } }, async request => {
     const result = await database().query(`SELECT phase, status, sheet_url, message, started_at, finished_at
@@ -84,6 +90,7 @@ export async function createServer(): Promise<FastifyInstance> {
     return { ok: true };
   }));
   server.get('/api/status', { config: { permission: 'report:read' } }, async request => withAccount(request.accountSession!.user_id, async () => {
+    await WorkspaceService.ensure({ drive: false });
     const assignment = await ClassroomService.getTargetAssignment();
     if (!assignment) return { assignment: null, teachers: [] };
     const submissions = await ClassroomService.getSubmissions(assignment.id);

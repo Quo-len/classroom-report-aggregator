@@ -4,6 +4,7 @@ import { database } from './database.service';
 import { encrypt, decrypt } from './token-crypto';
 import { getWebEnv } from '../config/web-env';
 import { accountContext } from '../core/account-context';
+import { workspaceSettings } from './workspace.service';
 
 export const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 export const secret = () => randomBytes(32).toString('base64url');
@@ -34,7 +35,9 @@ export async function saveTokens(userId: string, tokens: Credentials, expectedVe
 }
 
 export async function withAccount<T>(userId: string, action: () => Promise<T>, dryRun = false, requireSettings = true): Promise<T> {
-  const result = await database().query('SELECT u.tokens, u.auth_version, s.value FROM bird.users u LEFT JOIN bird.settings s ON s.user_id = u.id WHERE u.id = $1', [userId]);
+  const result = await database().query(`SELECT u.tokens, u.auth_version, s.value, w.course_id, w.root_folder_id, w.reports_folder_id,
+      w.plan_sheet_id, w.sci_plan_sheet_id
+    FROM bird.users u LEFT JOIN bird.settings s ON s.user_id = u.id LEFT JOIN bird.workspaces w ON w.user_id = u.id WHERE u.id = $1`, [userId]);
   const row = result.rows[0];
   if (!row?.tokens) throw new Error('Reconnect your Google account');
   if (requireSettings && !row.value) throw new Error('Complete account setup first');
@@ -49,7 +52,11 @@ export async function withAccount<T>(userId: string, action: () => Promise<T>, d
     await auth.getAccessToken();
     await pending;
     if (saveError) throw new Error('Unable to save refreshed authorization');
-    return await accountContext.run({ userId, auth, settings: row.value || {}, dryRun }, action);
+    const settings = { ...(row.value || {}), ...workspaceSettings(row.course_id || undefined, {
+      rootFolderId: row.root_folder_id || undefined, reportsFolderId: row.reports_folder_id || undefined,
+      planSheetId: row.plan_sheet_id || undefined, sciPlanSheetId: row.sci_plan_sheet_id || undefined,
+    }) };
+    return await accountContext.run({ userId, auth, settings, dryRun }, action);
   } finally {
     await pending;
     if (saveError) console.error('Failed to persist refreshed Google authorization');

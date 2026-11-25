@@ -11,7 +11,7 @@
     "db:migrate": "tsx scripts/migrate.ts",
     "schedule:setup": "tsx scripts/configure-schedule.ts",
     "delivery:review": "tsx scripts/review-delivery.ts",
-    "test:hosted": "tsx test/test-account-context.ts && tsx test/test-hosted.ts",
+    "test:hosted": "tsx test/test-account-context.ts && tsx test/test-workspace.ts && tsx test/test-hosted.ts",
     "test:browser": "tsx test/test-browser.ts",
     "dev": "tsx src/index.ts",
     "test": "tsx test/test-aggregator.ts && tsx test/test-doc-parser.ts && tsx test/test-ai-service.ts",

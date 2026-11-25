@@ -9,6 +9,7 @@ import { createServer } from './server';
 import { env } from './config/env';
 import { executeWorkflow, Phase } from './services/workflow.service';
 import { closeDatabase } from './services/database.service';
+import { WorkspaceService } from './services/workspace.service';
 
 /**
  * Custom logger helper with timestamp
@@ -286,6 +287,9 @@ async function main() {
       });
       return; // Keep running
     }
+
+    const legacyCli = !process.env.DATABASE_URL && !args.includes('--auth-init');
+    if (legacyCli) await WorkspaceService.prepareLocal(await AuthService.getAuthClient() as any);
 
     if (args.includes('--healthcheck') || args.includes('--check')) {
       const ok = await HealthService.runDiagnostics();
