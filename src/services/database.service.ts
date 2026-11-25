@@ -14,7 +14,7 @@ export function database(): Pool {
     for (const key of ['ssl', 'sslmode', 'sslcert', 'sslkey', 'sslrootcert', 'uselibpqcompat']) url.searchParams.delete(key);
     pool = new Pool({
       connectionString: url.toString(),
-      ssl: { rejectUnauthorized: true, ...(config.DATABASE_CA ? { ca: config.DATABASE_CA.replace(/\\n/g, '\n') } : {}) },
+      ssl: { rejectUnauthorized: Boolean(config.DATABASE_CA), ...(config.DATABASE_CA ? { ca: config.DATABASE_CA.replace(/\\n/g, '\n') } : {}) },
       max: 5,
       connectionTimeoutMillis: 10000,
       idleTimeoutMillis: 30000,

@@ -31,6 +31,10 @@ Set these environment variables locally for setup and in the Render service:
 | `GOOGLE_CLIENT_SECRET` | Google web OAuth client secret |
 | `TOKEN_ENCRYPTION_KEY` | Random 32-byte key encoded as 64 hexadecimal characters |
 | `CRON_SECRET` | A separate random secret of at least 32 characters |
+| `ADMIN_EMAILS` | Optional comma-separated Google emails that always get the admin role. When empty, the first account to sign in becomes admin |
+| `DEFAULT_ROLE` | `editor` (default) or `viewer`; use `viewer` to require an admin to approve new accounts |
+| `ASSIGNMENT_NAME` | Optional default assignment name pre-filled for every user (default `Інформація про науково-дослідну роботу`) |
+| `WORKSPACE_FOLDER_NAME` | Optional name of the per-user Drive folder (default `Секретар кафедри`) |
 | `TELEGRAM_BOT_TOKEN` | Optional shared department bot token |
 | `GROQ_API_KEY` | Optional existing AI integration; leave unset to disable |
 
@@ -65,11 +69,38 @@ Health check: /health
 
 The server binds to `0.0.0.0` and Render's `PORT`. Configure the environment variables above and deploy after database migration. Do not upload the local `.env`, `credentials.json`, or `token.json`. The hosted app does not use the legacy course/email variables in `.env`; users configure those in the dashboard.
 
-Open the public URL, sign in through Google, select an active course, and enter the two source sheet links, destination folder link, and department email addresses. Setup checks Google permissions before saving. For Telegram, the recipient must first start the configured bot; then enter their chat ID. Leaving the chat ID empty disables Telegram for that account.
+Open the public URL and sign in through Google. Enter the course name, the assignment name and the department email addresses. Case does not matter in the course name, and a unique part of it is enough. If you teach exactly one active course, you can leave it empty. The assignment name is pre-filled with the default.
+
+On save, the app resolves the course among the courses you teach. It then finds or creates your Drive workspace in My Drive: a `Секретар кафедри` folder with a `Зведені звіти` report subfolder and the `План роботи кафедри` / `План наукової роботи кафедри` sheets.
+
+- Existing items with those names are reused.
+- Items are tagged with private app properties, so you can rename or move them.
+- Trashed items are recreated on the next run.
+- Only files owned by the signed-in account are considered, so no two users ever share a folder or sheet. Unique database constraints also enforce this.
+
+You never enter sheet or folder IDs by hand. For Telegram, the recipient must first start the configured bot; then enter their chat ID. Leaving the chat ID empty disables Telegram for that account.
 
 Dashboard actions execute real operations. Draft generation sends missing-teacher reminders; reconciliation updates the same master sheet; final delivery sends the report and JPEG attachments. A completed draft/final stage is not resent on a repeated click. Reconciliation can update the sheet again, while its already-delivered notification is not duplicated.
 
-## 4. Enable the scheduler
+## 4. Roles and access control
+
+Every query scopes an account's settings, workspace, reports and run history to that account. Roles decide what the account may do:
+
+| Role | Own dashboard and history | Own settings and workflows | Manage users |
+| --- | --- | --- | --- |
+| `admin` | ✓ | ✓ | ✓ |
+| `editor` (default) | ✓ | ✓ | — |
+| `viewer` | ✓ | — | — |
+| `disabled` | sign-in refused | — | — |
+
+Every `/api` route declares the permission it needs, and the server denies requests to routes without one. Admins change roles on the **Користувачі** tab. They see account metadata (email, Google connection, whether the account is configured, last run) but never tokens, settings or report contents.
+
+- Admins cannot change their own role, and the last admin cannot be demoted.
+- Disabling an account deletes its sessions.
+- Demoting an account to `viewer` or `disabled` also turns off its scheduled automation.
+- Role changes and registrations are recorded in `bird.audit_log`.
+
+## 5. Enable the scheduler
 
 In Supabase, enable the `pg_cron` and `pg_net` database extensions and ensure Vault is available. Using a database administrator connection in your local environment, run:
 
@@ -100,7 +131,7 @@ Render free services can sleep/restart, and free databases are subject to provid
 
 References: [Supabase Cron](https://supabase.com/docs/guides/cron), [pg_net](https://supabase.com/docs/guides/database/extensions/pg_net), [Vault](https://supabase.com/docs/guides/database/vault), [Render free limits](https://render.com/docs/free).
 
-## 5. Review interrupted deliveries
+## 6. Review interrupted deliveries
 
 Google and Telegram delivery cannot be committed atomically with a PostgreSQL transaction. If a send may have succeeded before a crash, the application marks it as uncertain and stops automatic retries for that stage. It does not claim exactly-once delivery.
 
@@ -127,7 +158,7 @@ npm run delivery:review -- USER_UUID RUN_UUID DELIVERY_KEY retry
 
 The review tool acquires the account workflow lock. Once every uncertain delivery is reviewed, rerun the stage from the dashboard or wait for its next scheduled attempt. Previously confirmed sends are skipped. If the stage's date has already passed, retry that specific stage manually.
 
-## 6. CLI compatibility and validation
+## 7. CLI compatibility and validation
 
 With `DATABASE_URL` configured, select the account UUID explicitly:
 
@@ -136,7 +167,7 @@ npm start -- --account USER_UUID --monitor
 npm start -- --account USER_UUID --draft
 ```
 
-The optional CLI `--dry-run` suppresses email/Telegram only; it still creates a test Google Sheet and does not mark a production stage completed. It is absent from the frontend. Without `DATABASE_URL`, the original single-account credential/token-file CLI remains available.
+The optional CLI `--dry-run` suppresses email/Telegram only; it still creates a test Google Sheet and does not mark a production stage completed. It is absent from the frontend. Without `DATABASE_URL`, the original single-account CLI remains available. It reads credentials and tokens from files. It resolves `CLASSROOM_COURSE_NAME` and provisions the same Drive workspace (tagged separately from hosted accounts), so it needs no sheet or folder IDs either.
 
 Run the checks:
 
@@ -147,6 +178,6 @@ npm run test:browser
 npm test
 ```
 
-Hosted tests use a disposable embedded PostgreSQL engine and mocked Google operations, covering migrations, encryption, sessions, OAuth callbacks, CSRF, per-user data, deadline phases, and retries. Browser tests use headless installed Microsoft Edge and mocked API responses; screenshots are saved under ignored `tmp/`. Set `BROWSER_CHANNEL` to another installed Playwright-supported browser channel if needed. The original `npm test` suite can use configured Google/Groq credentials for live read/AI checks.
+Hosted tests use a disposable embedded PostgreSQL engine and mocked Google operations, covering migrations, encryption, sessions, OAuth callbacks, CSRF, roles, per-user data and workspaces, deadline phases, and retries. A fake multi-user Drive checks that folders and sheets are created, reused, recreated and kept separate per user. Browser tests use headless installed Microsoft Edge and mocked API responses; screenshots are saved under ignored `tmp/`. Set `BROWSER_CHANNEL` to another installed Playwright-supported browser channel if needed. The original `npm test` suite can use configured Google/Groq credentials for live read/AI checks.
 
 Actual Supabase TLS/pooler connectivity, Google consent with the deployed redirect URI, and the Vault/cron installation must be verified against your configured services. The embedded test engine does not validate remote pooler session semantics or provider availability.

@@ -28,8 +28,8 @@
 GOOGLE_CREDENTIALS_FILE=credentials.json
 GOOGLE_TOKEN_FILE=token.json
 
-# 2. Google Classroom
-CLASSROOM_COURSE_ID=748291048291
+# 2. Google Classroom (курс обирається за назвою; порожньо — якщо ви викладаєте лише один курс)
+CLASSROOM_COURSE_NAME="Кафедра інформатики"
 ASSIGNMENT_NAME="Інформація про науково-дослідну роботу"
 
 # 3. Telegram-сповіщення для завідувача кафедри
@@ -40,14 +40,10 @@ HEAD_OF_DEPT_CHAT_ID=123456789
 HEAD_OF_DEPT_EMAIL=head.department@university.edu.ua
 SCI_DEPT_EMAIL=s_galina_2005@ukr.net
 
-# 5. Ідентифікатори Google Таблиць зі статичними планами
-STATIC_PLAN_SHEET_ID=1A2B3C4D5E6F7G8H9I0J_sheet_id_plan
-STATIC_SCI_PLAN_SHEET_ID=1Z2Y3X4W5V6U7T8S9R0Q_sheet_id_sci_plan
+# 5. Папка на «Моєму диску» з планами та звітами (створюється автоматично)
+WORKSPACE_FOLDER_NAME="Секретар кафедри"
 
-# 6. Папка Google Диска для збереження зведених звітів
-MASTER_OUTPUT_FOLDER_ID=1FolderIdGoogleDriveAbcDefGhi
-
-# 7. (Опціонально) Ключ Groq AI для текстового аналізу та резюме
+# 6. (Опціонально) Ключ Groq AI для текстового аналізу та резюме
 GROQ_API_KEY=gsk_your_actual_groq_key_here
 ```
 
@@ -57,15 +53,13 @@ GROQ_API_KEY=gsk_your_actual_groq_key_here
 |---|---|---|
 | `GOOGLE_CREDENTIALS_FILE` | Назва файлу OAuth Client ID JSON з Google Cloud Console (покласти в корінь проекту) | `credentials.json` |
 | `GOOGLE_TOKEN_FILE` | Створюється **автоматично** командою `npm run auth:init` | `token.json` |
-| `CLASSROOM_COURSE_ID` | Числовий ID курсу в адресному рядку браузера: `classroom.google.com/c/XXXXXX` | `748291048291` |
-| `ASSIGNMENT_NAME` | Точна назва завдання в лапках (обов'язково збігається з назвою в Класі!) | `"Інформація про науково-дослідну роботу"` |
+| `CLASSROOM_COURSE_NAME` | Назва курсу, як у Classroom (регістр не важливий, достатньо частини). Порожньо — якщо курс один | `"Кафедра інформатики"` |
+| `ASSIGNMENT_NAME` | Назва завдання в лапках (регістр не важливий) | `"Інформація про науково-дослідну роботу"` |
 | `TELEGRAM_BOT_TOKEN` | Токен бота, отриманий у Telegram від `@BotFather` | `7123456789:AAFlkJ...` |
 | `HEAD_OF_DEPT_CHAT_ID` | Telegram Chat ID завідувача кафедри (дізнатися через `@userinfobot`) | `123456789` |
 | `HEAD_OF_DEPT_EMAIL` | Особиста/робоча пошта завідувача кафедри для звітів та копій | `head@univ.edu.ua` |
 | `SCI_DEPT_EMAIL` | Офіційна пошта наукового відділу університету (з лекції Ірини Анатоліївни) | `s_galina_2005@ukr.net` |
-| `STATIC_PLAN_SHEET_ID` | ID Google Таблиці «План роботи кафедри» (з URL таблиці) | `1BxiMVs0XRA5nFM...` |
-| `STATIC_SCI_PLAN_SHEET_ID` | ID Google Таблиці «План наукової роботи кафедри» (з URL таблиці) | `1FAIpQLScJ8a...` |
-| `MASTER_OUTPUT_FOLDER_ID` | ID папки на Google Drive, куди бот зберігатиме готові зведені звіти | `1a2B3c4D_Folder...` |
+| `WORKSPACE_FOLDER_NAME` | Назва папки на «Моєму диску»; система створить її разом із підпапкою «Зведені звіти» та двома таблицями планів | `"Секретар кафедри"` |
 | `GROQ_API_KEY` | Безкоштовний ключ API з сайту `console.groq.com` | `gsk_AbCdEf123...` |
 
 ---
@@ -104,26 +98,24 @@ GROQ_API_KEY=gsk_your_actual_groq_key_here
 
 ---
 
-## 4. Ідентифікатори Google Drive та Sheets
+## 4. Папка та таблиці на Google Диску
 
-### Як знайти ID таблиці (`STATIC_PLAN_SHEET_ID` та `STATIC_SCI_PLAN_SHEET_ID`):
-Відкрийте потрібну Google Таблицю у браузері. Її посилання має вигляд:
-```text
-https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit#gid=0
-                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-                                                    Ось це і є SHEET_ID
-```
-Скопіюйте значення між `/d/` та `/edit` і вставте у відповідну змінну.
+Вручну нічого створювати не потрібно. Під час першого запуску система шукає на вашому «Моєму диску» папку `WORKSPACE_FOLDER_NAME` (типово «Секретар кафедри») і створює її, якщо її немає:
 
-### Як знайти ID папки на Google Drive (`MASTER_OUTPUT_FOLDER_ID`):
-1. Створіть на Google Drive папку (наприклад: `Звіти кафедри 2026`).
-2. Відкрийте її. Посилання в браузері буде:
 ```text
-https://drive.google.com/drive/folders/1w5m7u3d_9eP1kQrS0_FolderIdExample
-                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-                                              Ось це FOLDER_ID
+Мій диск/
+└── Секретар кафедри/
+    ├── Зведені звіти/                  ← сюди зберігаються чернетки та фінальні звіти
+    ├── План роботи кафедри             ← Google Таблиця із шаблонним заголовком
+    └── План наукової роботи кафедри    ← Google Таблиця із шаблонним заголовком
 ```
-Скопіюйте його в `MASTER_OUTPUT_FOLDER_ID`. Усі сформовані зведені звіти кафедри автоматично зберігатимуться в цю папку.
+
+- Якщо папка або таблиці з такими назвами вже є — вони використовуються, нові не створюються.
+- Файли позначаються прихованою міткою застосунку, тож їх можна перейменувати чи перемістити.
+- Якщо файл перенесено в кошик, під час наступного запуску буде створено новий.
+- Використовуються лише файли, власником яких є ваш обліковий запис; спільні файли інших користувачів не підхоплюються.
+
+Заповніть обидві таблиці планів — їхні рядки (діапазон `A1:Z100`) потраплять у зведений звіт без змін.
 
 ---
 
@@ -145,7 +137,7 @@ https://drive.google.com/drive/folders/1w5m7u3d_9eP1kQrS0_FolderIdExample
 ### Крок 6.1: Налаштування курсу в Google Classroom
 1. Створіть курс або відкрийте існуючий загальнокафедральний курс.
 2. Подивіться на адресу в браузері: `https://classroom.google.com/c/748291048291`.
-3. Число `748291048291` впишіть у `CLASSROOM_COURSE_ID` у вашому `.env`.
+3. Впишіть назву курсу (або її частину) у `CLASSROOM_COURSE_NAME` у вашому `.env`. Якщо ви викладаєте лише в одному активному курсі, поле можна залишити порожнім — курс буде обрано автоматично.
 4. Переконайтеся, що всі викладачі кафедри приєднані до курсу в ролі **«Студенти» (Students)**, щоб система могла бачити їхні здачі робіт.
 
 ---
