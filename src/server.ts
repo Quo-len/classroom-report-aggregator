@@ -74,13 +74,13 @@ export async function createServer(): Promise<FastifyInstance> {
       teachers: submissions.map(item => ({ name: item.studentName, email: item.studentEmail, hasSubmitted: item.hasSubmitted,
         attachments: item.attachments.map(file => file.title || '????') })) };
   }));
-  server.post<{ Params: { phase: string }; Body: { dryRun?: boolean } }>('/api/trigger/:phase', async (request, reply) => {
+  server.post<{ Params: { phase: string } }>('/api/trigger/:phase', async (request, reply) => {
     const actions: Record<string, () => Promise<unknown>> = {
       monitor: runMonitoringPhase, draft: runDraftPhase, reconcile: runReconcilePhase, final: runFinalPhase, auto: runAutoDailyWorkflow,
     };
     const action = actions[request.params.phase];
     if (!action) return reply.code(400).send({ error: '???????? ???.' });
-    const result = await withAccount(request.accountSession!.user_id, action, request.body?.dryRun ?? true);
+    const result = await withAccount(request.accountSession!.user_id, action, false);
     return { ok: true, sheetUrl: typeof result === 'string' ? result : undefined };
   });
   server.addHook('onClose', closeDatabase);

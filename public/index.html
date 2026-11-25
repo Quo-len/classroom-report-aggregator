@@ -238,18 +238,7 @@
       font-weight: 600;
     }
 
-    .dry-run-toggle {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 14px;
-      font-weight: 500;
-      background: #eff6ff;
-      padding: 6px 12px;
-      border-radius: 6px;
-      border: 1px solid #bfdbfe;
-      cursor: pointer;
-    }
+
 
     .btn-group {
       display: grid;
@@ -432,10 +421,7 @@
     <div class="card controls-card">
       <div class="controls-header">
         <h2>⚡ Ручний запуск операцій</h2>
-        <label class="dry-run-toggle">
-          <input type="checkbox" id="dryRunToggle" checked>
-          🧪 Dry-Run режим (безпечна симуляція без відправки реальних листів)
-        </label>
+
       </div>
 
       <div class="btn-group">
@@ -620,7 +606,7 @@
     }
 
     async function triggerPhase(phase) {
-      const isDryRun = document.getElementById('dryRunToggle').checked;
+
       const phaseLabels = {
         monitor: 'Моніторинг',
         draft: 'Формування чернетки (Т-3)',
@@ -631,7 +617,7 @@
 
       const label = phaseLabels[phase] || phase;
       let cmd = cliCommands[phase] || 'npm start';
-      if (isDryRun) cmd += ' --dry-run';
+
 
       if (!isServerRunning) {
         try {
@@ -650,7 +636,7 @@
         const res = await fetch(`${API_BASE}/api/trigger/${phase}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ dryRun: isDryRun })
+          body: JSON.stringify({})
         });
 
         const data = await res.json();
