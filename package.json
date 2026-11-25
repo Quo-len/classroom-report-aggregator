@@ -46,6 +46,7 @@
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.6.0",
+    "@flydotio/dockerfile": "^0.7.15",
     "@types/node": "^22.13.0",
     "@types/pg": "^8.23.1",
     "playwright": "^1.65.1",
