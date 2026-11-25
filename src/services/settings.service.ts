@@ -14,7 +14,7 @@ export const settingsSchema = z.object({
   MASTER_OUTPUT_FOLDER_ID: resourceId,
   HEAD_OF_DEPT_EMAIL: z.string().trim().email(),
   SCI_DEPT_EMAIL: z.string().trim().email(),
-  HEAD_OF_DEPT_CHAT_ID: z.string().trim().regex(/^-?\d*$/).max(30).default(''),
+  HEAD_OF_DEPT_CHAT_ID: z.string().trim().regex(/^(-?\d+)?$/).max(30).default(''),
 }).strict();
 
 export function registerSettings(server: FastifyInstance) {

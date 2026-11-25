@@ -1,0 +1,76 @@
+import { accountContext } from '../core/account-context';
+import { withAccount } from './account.service';
+import { database, withAccountLock } from './database.service';
+import { ClassroomService } from './classroom.service';
+import { runDraftPhase, runReconcilePhase, runFinalPhase } from '../index';
+
+export type Phase = 'monitor' | 'draft' | 'reconcile' | 'final' | 'auto';
+
+export function phaseForDays(days: number | null): Exclude<Phase, 'auto'> {
+  if (days === null || days > 3) return 'monitor';
+  if (days <= 0) return 'final';
+  if (days === 1) return 'reconcile';
+  return 'draft';
+}
+
+export async function executeWorkflow(userId: string, requested: Phase, dryRun = false) {
+  return withAccountLock(userId, () => withAccount(userId, async () => {
+    const context = accountContext.getStore()!;
+    const assignment = await ClassroomService.getTargetAssignment();
+    if (!assignment) throw Object.assign(new Error('Assignment not found'), { statusCode: 404 });
+    const phase = requested === 'auto' ? phaseForDays(assignment.daysRemaining) : requested;
+    if (phase === 'monitor') return { ok: true, message: 'Перевірку завершено. Звіт за розкладом ще не потрібний.' };
+    context.assignmentId = assignment.id;
+    if (dryRun) {
+      const submissions = await ClassroomService.getSubmissions(assignment.id);
+      const actions = { draft: runDraftPhase, reconcile: runReconcilePhase, final: runFinalPhase };
+      return { ok: true, sheetUrl: await actions[phase](assignment, submissions), message: 'Notification dry run completed; a test report was created.' };
+    }
+    const courseId = context.settings.CLASSROOM_COURSE_ID!;
+    const previous = await database().query(`SELECT id, status, sheet_url FROM bird.runs
+      WHERE user_id = $1 AND course_id = $2 AND assignment_id = $3 AND phase = $4`, [userId, courseId, assignment.id, phase]);
+    const last = previous.rows[0];
+    if (last?.status === 'completed' && (requested === 'auto' || phase !== 'reconcile')) {
+      return { ok: true, sheetUrl: last.sheet_url, message: 'Цей етап уже виконано. Повторні сповіщення не надсилалися.' };
+    }
+    if (last) {
+      const uncertain = await database().query("SELECT 1 FROM bird.deliveries WHERE run_id = $1 AND status != 'sent' LIMIT 1", [last.id]);
+      if (uncertain.rowCount) {
+        await database().query("UPDATE bird.runs SET status = 'needs_review', message = $2 WHERE id = $1", [last.id, 'Доставку перервано. Перевірте надіслані повідомлення перед повторним запуском.']);
+        throw Object.assign(new Error('Notification delivery requires review'), { statusCode: 409 });
+      }
+    }
+    const run = await database().query(`INSERT INTO bird.runs (user_id, course_id, assignment_id, phase, status)
+      VALUES ($1, $2, $3, $4, 'running') ON CONFLICT (user_id, course_id, assignment_id, phase)
+      DO UPDATE SET status = 'running', started_at = now(), finished_at = NULL, message = NULL RETURNING id`, [userId, courseId, assignment.id, phase]);
+    context.runId = run.rows[0].id;
+    try {
+      const submissions = await ClassroomService.getSubmissions(assignment.id);
+      const actions = { draft: runDraftPhase, reconcile: runReconcilePhase, final: runFinalPhase };
+      const sheetUrl = await actions[phase](assignment, submissions);
+      if (!sheetUrl) throw new Error('Report generation failed');
+      await database().query("UPDATE bird.runs SET status = 'completed', sheet_url = $2, finished_at = now() WHERE id = $1", [context.runId, sheetUrl]);
+      return { ok: true, sheetUrl, message: 'Звіт оновлено. Сповіщення надіслано відповідно до етапу.' };
+    } catch (error) {
+      await database().query(`UPDATE bird.runs SET status = CASE WHEN EXISTS
+        (SELECT 1 FROM bird.deliveries WHERE run_id = $1 AND status != 'sent') THEN 'needs_review' ELSE 'failed' END,
+        message = $2, finished_at = now() WHERE id = $1`, [context.runId, 'Виконання перервано. Перевірте доступ до Google та стан доставки.']);
+      throw error;
+    }
+  }, dryRun));
+}
+
+export async function runScheduledAccounts() {
+  return withAccountLock('scheduled-workflow', async () => {
+    await database().query('DELETE FROM bird.sessions WHERE expires_at < now()');
+    await database().query('DELETE FROM bird.oauth_attempts WHERE expires_at < now()');
+    const accounts = await database().query(`SELECT s.user_id FROM bird.settings s JOIN bird.users u ON u.id = s.user_id
+      WHERE s.automation_enabled AND u.tokens IS NOT NULL ORDER BY s.user_id`);
+    let completed = 0, failed = 0;
+    for (const { user_id } of accounts.rows) {
+      try { await executeWorkflow(user_id, 'auto'); completed++; }
+      catch { failed++; console.error(`Scheduled workflow failed for account ${user_id}`); }
+    }
+    return { ok: failed === 0, completed, failed };
+  });
+}

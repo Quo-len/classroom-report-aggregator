@@ -48,6 +48,7 @@ export function registerAuth(server: FastifyInstance) {
       const auth = oauthClient();
       const { tokens } = await auth.getToken({ code, codeVerifier: attempt.rows[0].verifier });
       if (!tokens.id_token) throw new Error('Missing Google identity');
+      if (tokens.scope && SCOPES.some(scope => !tokens.scope!.split(' ').includes(scope))) throw new Error('Required Google permissions were not granted');
       const ticket = await auth.verifyIdToken({ idToken: tokens.id_token, audience: getWebEnv().GOOGLE_CLIENT_ID });
       const identity = ticket.getPayload();
       if (!identity?.sub || !identity.email || !identity.email_verified || (identity as any).nonce !== attempt.rows[0].nonce) throw new Error('Invalid Google identity');

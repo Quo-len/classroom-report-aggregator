@@ -1,3 +1,5 @@
+import { accountContext } from '../core/account-context';
+import { database } from './database.service';
 import { google, sheets_v4 } from 'googleapis';
 import { AuthService } from './auth.service';
 import { DriveService } from './drive.service';
@@ -57,6 +59,12 @@ export class SheetsService {
   ): Promise<{ spreadsheetId: string; webViewLink: string }> {
     const sheets = await this.getClient();
     let spreadsheetId = existingSpreadsheetId;
+    const context = accountContext.getStore();
+    if (context?.assignmentId && !context.dryRun) {
+      const existing = await database().query('SELECT spreadsheet_id FROM bird.reports WHERE user_id = $1 AND course_id = $2 AND assignment_id = $3',
+        [context.userId, env.CLASSROOM_COURSE_ID, context.assignmentId]);
+      spreadsheetId = existing.rows[0]?.spreadsheet_id || spreadsheetId;
+    }
     const summarySheetTitle = 'Підсумковий звіт';
     const detailSheetTitle = 'Деталізація по викладачах';
 
@@ -109,8 +117,12 @@ export class SheetsService {
         throw new Error('Failed to create Master Google Sheet: empty spreadsheet ID returned.');
       }
 
-      // Move into destination folder
-      await DriveService.moveFileToMasterFolder(spreadsheetId, env.MASTER_OUTPUT_FOLDER_ID);
+      if (context?.assignmentId && !context.dryRun) {
+        await database().query(`INSERT INTO bird.reports (user_id, course_id, assignment_id, spreadsheet_id) VALUES ($1, $2, $3, $4)
+          ON CONFLICT (user_id, course_id, assignment_id) DO UPDATE SET spreadsheet_id = EXCLUDED.spreadsheet_id`,
+          [context.userId, env.CLASSROOM_COURSE_ID, context.assignmentId, spreadsheetId]);
+      }
+
     } else {
       console.log(`🔄 Updating existing Master Spreadsheet ID: [${spreadsheetId}]...`);
       const meta = await sheets.spreadsheets.get({ spreadsheetId });
@@ -153,6 +165,18 @@ export class SheetsService {
         detailSheetId = addSheetRes.data.replies?.[0]?.addSheet?.properties?.sheetId || 1;
       }
 
+      const resize: sheets_v4.Schema$Request[] = [{ updateSheetProperties: {
+        properties: { sheetId: summarySheetId, gridProperties: { rowCount: Math.max(summaryGrid.length + 5, 135) } },
+        fields: 'gridProperties.rowCount',
+      } }, { unmergeCells: { range: { sheetId: summarySheetId } } }];
+      if (detailGrid?.length) resize.push({ updateSheetProperties: {
+        properties: { sheetId: detailSheetId, gridProperties: {
+          rowCount: Math.max(detailGrid.length + 20, 150),
+          columnCount: Math.max(...detailGrid.map(row => row.length), 10) + 5,
+        } }, fields: 'gridProperties.rowCount,gridProperties.columnCount',
+      } });
+      await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests: resize } });
+
       // Clear values on both sheets
       try {
         await sheets.spreadsheets.values.clear({
@@ -172,6 +196,8 @@ export class SheetsService {
         } catch {}
       }
     }
+
+    await DriveService.moveFileToMasterFolder(spreadsheetId, env.MASTER_OUTPUT_FOLDER_ID);
 
     // 1. Write Sheet 1: 1-to-1 Summary Grid (Columns A, B, C only)
     console.log(`✍️ Writing ${summaryGrid.length} rows to Sheet 1 [${summarySheetTitle}]...`);

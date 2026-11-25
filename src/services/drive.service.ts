@@ -1,3 +1,4 @@
+import { accountContext } from '../core/account-context';
 import fs from 'fs';
 import path from 'path';
 import { google, drive_v3 } from 'googleapis';
@@ -196,6 +197,7 @@ export class DriveService {
         supportsAllDrives: true,
       });
 
+      if (file.data.parents?.includes(folderId)) return;
       const previousParents = (file.data.parents || []).join(',');
 
       await drive.files.update({

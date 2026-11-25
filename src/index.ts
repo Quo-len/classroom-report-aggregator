@@ -7,6 +7,8 @@ import { HealthService } from './services/health.service';
 import { Aggregator } from './core/aggregator';
 import { createServer } from './server';
 import { env } from './config/env';
+import { executeWorkflow, Phase } from './services/workflow.service';
+import { closeDatabase } from './services/database.service';
 
 /**
  * Custom logger helper with timestamp
@@ -243,6 +245,7 @@ Options:
   --healthcheck   Run diagnostic health checks on Google APIs & Telegram bot connectivity
   --auto          (Default) Automatically detect timeline relative to deadline and run corresponding phase
   --auth-init     Initiate interactive Google OAuth2 consent and generate token.json
+  --account ID    Select a hosted account UUID when DATABASE_URL is configured
   --help, -h      Display this help message
   `);
 }
@@ -287,6 +290,14 @@ async function main() {
     if (args.includes('--healthcheck') || args.includes('--check')) {
       const ok = await HealthService.runDiagnostics();
       process.exit(ok ? 0 : 1);
+    } else if (process.env.DATABASE_URL) {
+      const accountIndex = args.indexOf('--account');
+      const userId = accountIndex >= 0 ? args[accountIndex + 1] : undefined;
+      if (!userId || !/^[0-9a-f-]{36}$/i.test(userId)) throw new Error('Use --account USER_UUID for hosted CLI workflows.');
+      const phases: Phase[] = ['monitor', 'draft', 'reconcile', 'final', 'auto'];
+      const phase = phases.find(value => args.includes(`--${value}`)) || 'auto';
+      await executeWorkflow(userId, phase, isDryRun);
+      await closeDatabase();
     } else if (args.includes('--auth-init')) {
       await runAuthInit();
     } else if (args.includes('--monitor')) {

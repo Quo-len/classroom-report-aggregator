@@ -1,3 +1,4 @@
+import { deliverOnce } from './delivery.service';
 import { accountContext } from '../core/account-context';
 import { google, gmail_v1 } from 'googleapis';
 import { Telegraf } from 'telegraf';
@@ -107,16 +108,17 @@ export class NotifyService {
 
       console.log(`📧 Sending email via Gmail to: [${recipients}], Subject: "${options.subject}"...`);
 
-      await gmail.users.messages.send({
+      await deliverOnce(`email:${recipients}:${options.subject}`, () => gmail.users.messages.send({
         userId: 'me',
         requestBody: {
           raw,
         },
-      });
+      }));
 
       console.log(`✅ Email successfully sent to [${recipients}]`);
       return true;
     } catch (error) {
+      if (accountContext.getStore()) throw error;
       console.error(`❌ Failed to send email to [${options.to}]:`, error);
       return false;
     }
@@ -137,10 +139,11 @@ export class NotifyService {
     try {
       console.log(`📱 Sending Telegram notification to chat [${chatId}]...`);
       const bot = this.getTelegramBot();
-      await bot.telegram.sendMessage(chatId, text, { parse_mode: 'HTML' });
+      await deliverOnce(`telegram:${chatId}`, () => bot.telegram.sendMessage(chatId, text, { parse_mode: 'HTML' }));
       console.log(`✅ Telegram message sent successfully to [${chatId}]`);
       return true;
     } catch (error) {
+      if (accountContext.getStore()) throw error;
       console.error(`❌ Error sending Telegram notification to [${chatId}]:`, error);
       return false;
     }

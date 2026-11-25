@@ -4,12 +4,13 @@ import fastifyStatic from '@fastify/static';
 import { getWebEnv } from './config/web-env';
 import { registerAuth, getSession, Session } from './services/session.service';
 import { withAccount, oauthClient } from './services/account.service';
-import { database, closeDatabase } from './services/database.service';
+import { database, closeDatabase, withAccountLock } from './services/database.service';
 import { decrypt } from './services/token-crypto';
 import { Credentials } from 'google-auth-library';
 import { ClassroomService } from './services/classroom.service';
 import { registerSettings } from './services/settings.service';
-import { runMonitoringPhase, runDraftPhase, runReconcilePhase, runFinalPhase, runAutoDailyWorkflow } from './index';
+import { executeWorkflow, runScheduledAccounts, Phase } from './services/workflow.service';
+import { timingSafeEqual } from 'crypto';
 
 declare module 'fastify' {
   interface FastifyRequest { accountSession: Session | null; }
@@ -25,21 +26,21 @@ export async function createServer(): Promise<FastifyInstance> {
     reply.header('X-Frame-Options', 'DENY');
     reply.header('Cache-Control', 'no-store');
     reply.header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
-    const url = request.url.split('?')[0];
+    const url = request.routeOptions.url || request.url.split('?')[0];
     if (!url.startsWith('/api/')) return;
     request.accountSession = await getSession(request);
     if (url === '/api/me' && request.method === 'GET') return;
-    if (!request.accountSession) return reply.code(401).send({ error: '???????? ????? Google.' });
+    if (!request.accountSession) return reply.code(401).send({ error: 'Увійдіть через Google.' });
     if (request.method !== 'GET' && (request.headers.origin !== new URL(config.APP_URL).origin ||
       request.headers['x-csrf-token'] !== request.accountSession.csrf_token)) {
-      return reply.code(403).send({ error: '??????? ???????? ?? ????????? ?? ???.' });
+      return reply.code(403).send({ error: 'Оновіть сторінку та спробуйте ще раз.' });
     }
   });
   server.setErrorHandler((error, request, reply) => {
     const failure = error as { code?: string; statusCode?: number };
     server.log.error({ code: failure.code || 'REQUEST_FAILED', route: request.routeOptions.url }, 'Request failed');
     reply.code(failure.statusCode && failure.statusCode < 500 ? failure.statusCode : 500)
-      .send({ error: '?? ??????? ???????? ???. ????????? ??????????? Google ?? ????????????.' });
+      .send({ error: 'Не вдалося виконати дію. Перевірте підключення Google та налаштування.' });
   });
   server.register(fastifyStatic, { root: path.resolve('public'), prefix: '/' });
   registerAuth(server);
@@ -57,7 +58,7 @@ export async function createServer(): Promise<FastifyInstance> {
       FROM bird.runs WHERE user_id = $1 ORDER BY started_at DESC LIMIT 30`, [request.accountSession!.user_id]);
     return { runs: result.rows };
   });
-  server.post('/api/disconnect', async request => {
+  server.post('/api/disconnect', async request => withAccountLock(request.accountSession!.user_id, async () => {
     const userId = request.accountSession!.user_id;
     const result = await database().query('SELECT tokens FROM bird.users WHERE id = $1', [userId]);
     if (result.rows[0]?.tokens) {
@@ -67,10 +68,10 @@ export async function createServer(): Promise<FastifyInstance> {
         catch { server.log.warn('Google revocation failed; local access will be removed'); }
       }
     }
-    await database().query('UPDATE bird.users SET tokens = NULL WHERE id = $1', [userId]);
+    await database().query('UPDATE bird.users SET tokens = NULL, auth_version = auth_version + 1 WHERE id = $1', [userId]);
     await database().query('UPDATE bird.settings SET automation_enabled = false WHERE user_id = $1', [userId]);
     return { ok: true };
-  });
+  }));
   server.get('/api/status', async request => withAccount(request.accountSession!.user_id, async () => {
     const assignment = await ClassroomService.getTargetAssignment();
     if (!assignment) return { assignment: null, teachers: [] };
@@ -78,16 +79,19 @@ export async function createServer(): Promise<FastifyInstance> {
     return { assignment: { id: assignment.id, title: assignment.title, creationDate: assignment.creationDateFormatted,
       deadline: assignment.deadlineFormatted, daysRemaining: assignment.daysRemaining },
       teachers: submissions.map(item => ({ name: item.studentName, email: item.studentEmail, hasSubmitted: item.hasSubmitted,
-        attachments: item.attachments.map(file => file.title || '????') })) };
+        attachments: item.attachments.map(file => file.title || 'Файл') })) };
   }));
   server.post<{ Params: { phase: string } }>('/api/trigger/:phase', async (request, reply) => {
-    const actions: Record<string, () => Promise<unknown>> = {
-      monitor: runMonitoringPhase, draft: runDraftPhase, reconcile: runReconcilePhase, final: runFinalPhase, auto: runAutoDailyWorkflow,
-    };
-    const action = actions[request.params.phase];
-    if (!action) return reply.code(400).send({ error: '???????? ???.' });
-    const result = await withAccount(request.accountSession!.user_id, action, false);
-    return { ok: true, sheetUrl: typeof result === 'string' ? result : undefined };
+    if (!['monitor', 'draft', 'reconcile', 'final', 'auto'].includes(request.params.phase)) {
+      return reply.code(400).send({ error: 'Невідома дія.' });
+    }
+    return executeWorkflow(request.accountSession!.user_id, request.params.phase as Phase);
+  });
+  server.post('/internal/scheduled', async (request, reply) => {
+    const actual = Buffer.from(request.headers.authorization || '');
+    const expected = Buffer.from(`Bearer ${config.CRON_SECRET}`);
+    if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return reply.code(401).send({ error: 'Unauthorized' });
+    return runScheduledAccounts();
   });
   server.addHook('onClose', closeDatabase);
   return server;

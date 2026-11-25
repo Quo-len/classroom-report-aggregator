@@ -1,3 +1,4 @@
+import { calendarDaysRemaining } from '../core/deadline';
 import { google, classroom_v1 } from 'googleapis';
 import { AuthService } from './auth.service';
 import { DriveService } from './drive.service';
@@ -78,9 +79,7 @@ export class ClassroomService {
         const seconds = match.dueTime?.seconds ?? 59;
 
         deadline = new Date(Date.UTC(year, month, day, hours, minutes, seconds));
-        const now = new Date();
-        const diffMs = deadline.getTime() - now.getTime();
-        daysRemaining = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+        daysRemaining = calendarDaysRemaining(deadline);
       }
 
       // Detect linked Google Drive folder in assignment materials or description
@@ -135,6 +134,7 @@ export class ClassroomService {
         title: match.title || env.ASSIGNMENT_NAME,
         creationDate,
         creationDateFormatted: creationDate.toLocaleDateString('uk-UA', {
+          timeZone: 'Europe/Kyiv',
           year: 'numeric',
           month: 'long',
           day: 'numeric',
@@ -142,6 +142,7 @@ export class ClassroomService {
         deadline,
         deadlineFormatted: deadline
           ? deadline.toLocaleDateString('uk-UA', {
+              timeZone: 'Europe/Kyiv',
               year: 'numeric',
               month: 'long',
               day: 'numeric',
