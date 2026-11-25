@@ -8,6 +8,7 @@ import { database, closeDatabase } from './services/database.service';
 import { decrypt } from './services/token-crypto';
 import { Credentials } from 'google-auth-library';
 import { ClassroomService } from './services/classroom.service';
+import { registerSettings } from './services/settings.service';
 import { runMonitoringPhase, runDraftPhase, runReconcilePhase, runFinalPhase, runAutoDailyWorkflow } from './index';
 
 declare module 'fastify' {
@@ -41,6 +42,7 @@ export async function createServer(): Promise<FastifyInstance> {
   });
   server.register(fastifyStatic, { root: path.resolve('public'), prefix: '/' });
   registerAuth(server);
+  registerSettings(server);
   server.get('/health', async () => ({ ok: true }));
   server.get('/api/me', async request => {
     const session = request.accountSession;

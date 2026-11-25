@@ -126,6 +126,7 @@ export class NotifyService {
    * Sends a message via Telegram to the specified or default chat ID
    */
   public static async sendTelegramMessage(text: string, chatId: string = env.HEAD_OF_DEPT_CHAT_ID): Promise<boolean> {
+    if (accountContext.getStore() && !chatId) return true;
     if (this.dryRun) {
       console.log(`🧪 [DRY-RUN] Simulating Telegram notification to chat [${chatId}]`);
       const preview = text.replace(/<[^>]*>/g, '').trim().split('\n')[0] || '';
