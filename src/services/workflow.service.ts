@@ -65,7 +65,7 @@ export async function runScheduledAccounts() {
     await database().query('DELETE FROM bird.sessions WHERE expires_at < now()');
     await database().query('DELETE FROM bird.oauth_attempts WHERE expires_at < now()');
     const accounts = await database().query(`SELECT s.user_id FROM bird.settings s JOIN bird.users u ON u.id = s.user_id
-      WHERE s.automation_enabled AND u.tokens IS NOT NULL ORDER BY s.user_id`);
+      WHERE s.automation_enabled AND u.tokens IS NOT NULL AND u.role IN ('admin', 'editor') ORDER BY s.user_id`);
     let completed = 0, failed = 0;
     for (const { user_id } of accounts.rows) {
       try { await executeWorkflow(user_id, 'auto'); completed++; }

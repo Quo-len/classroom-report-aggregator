@@ -18,7 +18,7 @@ export const settingsSchema = z.object({
 }).strict();
 
 export function registerSettings(server: FastifyInstance) {
-  server.get('/api/courses', async request => withAccount(request.accountSession!.user_id, async () => {
+  server.get('/api/courses', { config: { permission: 'settings:write' } }, async request => withAccount(request.accountSession!.user_id, async () => {
     const api = google.classroom({ version: 'v1', auth: accountContext.getStore()!.auth });
     const courses: { id: string; name: string }[] = [];
     let pageToken: string | undefined;
@@ -30,7 +30,7 @@ export function registerSettings(server: FastifyInstance) {
     return { courses };
   }, false, false));
 
-  server.put('/api/settings', async (request, reply) => {
+  server.put('/api/settings', { config: { permission: 'settings:write' } }, async (request, reply) => {
     const parsed = z.object({ settings: settingsSchema, automationEnabled: z.boolean() }).strict().safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'Перевірте обов’язкові поля, адреси пошти та ідентифікатори файлів.' });
     const userId = request.accountSession!.user_id;

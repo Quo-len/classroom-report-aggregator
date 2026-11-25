@@ -5,8 +5,9 @@ import { database } from './database.service';
 import { hash, secret, oauthClient, saveTokens } from './account.service';
 import { decrypt } from './token-crypto';
 import { getWebEnv } from '../config/web-env';
+import { audit } from './rbac.service';
 
-export interface Session { user_id: string; name: string; email: string; csrf_token: string; connected: boolean; }
+export interface Session { user_id: string; name: string; email: string; csrf_token: string; connected: boolean; role: string; }
 
 export function cookie(request: FastifyRequest, name: string): string {
   return (request.headers.cookie || '').split(';').map(value => value.trim()).find(value => value.startsWith(`${name}=`))?.slice(name.length + 1) || '';
@@ -20,8 +21,9 @@ function setCookie(reply: FastifyReply, name: string, value: string, seconds: nu
 export async function getSession(request: FastifyRequest): Promise<Session | null> {
   const token = cookie(request, 'bird_session');
   if (!/^[\w-]{43}$/.test(token)) return null;
-  const result = await database().query(`SELECT s.user_id, s.csrf_token, u.name, u.email, (u.tokens IS NOT NULL) AS connected
-    FROM bird.sessions s JOIN bird.users u ON u.id = s.user_id WHERE s.token_hash = $1 AND s.expires_at > now()`, [hash(token)]);
+  const result = await database().query(`SELECT s.user_id, s.csrf_token, u.name, u.email, u.role, (u.tokens IS NOT NULL) AS connected
+    FROM bird.sessions s JOIN bird.users u ON u.id = s.user_id
+    WHERE s.token_hash = $1 AND s.expires_at > now() AND u.role != 'disabled'`, [hash(token)]);
   return result.rows[0] || null;
 }
 
@@ -52,10 +54,18 @@ export function registerAuth(server: FastifyInstance) {
       const ticket = await auth.verifyIdToken({ idToken: tokens.id_token, audience: getWebEnv().GOOGLE_CLIENT_ID });
       const identity = ticket.getPayload();
       if (!identity?.sub || !identity.email || !identity.email_verified || (identity as any).nonce !== attempt.rows[0].nonce) throw new Error('Invalid Google identity');
-      const user = await database().query(`INSERT INTO bird.users (google_sub, email, name) VALUES ($1, $2, $3)
-        ON CONFLICT (google_sub) DO UPDATE SET email = EXCLUDED.email, name = EXCLUDED.name RETURNING id, tokens`,
-        [identity.sub, identity.email, identity.name || identity.email]);
+      const config = getWebEnv();
+      const listedAdmin = config.ADMIN_EMAILS.includes(identity.email.toLowerCase());
+      // Listed admins are always promoted; without a list, the first account bootstraps administration.
+      const user = await database().query(`INSERT INTO bird.users (google_sub, email, name, role) VALUES ($1, $2, $3,
+          CASE WHEN $4::boolean OR ($5::boolean AND NOT EXISTS (SELECT 1 FROM bird.users WHERE role = 'admin')) THEN 'admin' ELSE $6 END)
+        ON CONFLICT (google_sub) DO UPDATE SET email = EXCLUDED.email, name = EXCLUDED.name,
+          role = CASE WHEN $4::boolean THEN 'admin' ELSE bird.users.role END
+        RETURNING id, tokens, role, (xmax = 0) AS created`,
+        [identity.sub, identity.email, identity.name || identity.email, listedAdmin, config.ADMIN_EMAILS.length === 0, config.DEFAULT_ROLE]);
       const userId = user.rows[0].id;
+      if (user.rows[0].role === 'disabled') return reply.redirect('/?login=disabled');
+      if (user.rows[0].created) await audit(userId, userId, 'user.registered', { role: user.rows[0].role });
       const previous = user.rows[0].tokens ? decrypt<Credentials>(user.rows[0].tokens, userId) : {};
       if (!tokens.refresh_token && !previous.refresh_token) throw new Error('Offline access was not granted');
       await saveTokens(userId, tokens);

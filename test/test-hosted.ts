@@ -84,6 +84,39 @@ async function main() {
     assert.doesNotMatch(await fs.readFile('public/app.js', 'utf8'), /dry.?run|\?{3,}/i);
     console.log('PASS: protected routes, CSRF, session restart persistence, account-owned settings and UTF-8 frontend');
 
+    await query("UPDATE bird.users SET role = 'admin' WHERE id = $1", [alice]);
+    await query("UPDATE bird.users SET role = 'viewer' WHERE id = $1", [bob]);
+    await query('UPDATE bird.settings SET automation_enabled = true WHERE user_id = $1', [bob]);
+    const bobToken = secret(), bobCsrf = secret();
+    await query("INSERT INTO bird.sessions VALUES ($1, $2, $3, now() + interval '1 hour')", [hash(bobToken), bob, bobCsrf]);
+    const bobHeaders = { cookie: `bird_session=${bobToken}`, origin: 'https://bird.example', 'x-csrf-token': bobCsrf };
+    const bobMe = (await server.inject({ url: '/api/me', headers: bobHeaders })).json();
+    assert.equal(bobMe.user.role, 'viewer');
+    assert.deepEqual(bobMe.user.permissions, ['account:self', 'report:read']);
+    assert.equal((await server.inject({ url: '/api/runs', headers: bobHeaders })).statusCode, 200);
+    assert.equal((await server.inject({ method: 'POST', url: '/api/trigger/draft', headers: bobHeaders, payload: {} })).statusCode, 403);
+    assert.equal((await server.inject({ method: 'PUT', url: '/api/settings', headers: bobHeaders, payload: {} })).statusCode, 403);
+    assert.equal((await server.inject({ url: '/api/courses', headers: bobHeaders })).statusCode, 403);
+    assert.equal((await server.inject({ url: '/api/admin/users', headers: bobHeaders })).statusCode, 403);
+    assert.equal((await server.inject({ url: '/api/unknown', headers: bobHeaders })).statusCode, 404);
+    const listing = (await server.inject({ url: '/api/admin/users', headers })).json();
+    assert.deepEqual(listing.users.map((user: any) => user.email).sort(), ['alice@example.com', 'bob@example.com']);
+    assert.doesNotMatch(JSON.stringify(listing), /tokens|refresh|course/);
+    const setRole = (id: string, role: string, as = headers) => server!.inject({ method: 'PUT', url: `/api/admin/users/${id}/role`, headers: as, payload: { role } });
+    assert.equal((await setRole(alice, 'viewer')).statusCode, 400);
+    assert.equal((await setRole(bob, 'owner')).statusCode, 400);
+    assert.equal((await setRole(alice, 'admin', bobHeaders)).statusCode, 403);
+    assert.equal((await setRole(bob, 'disabled')).statusCode, 200);
+    assert.equal((await server.inject({ url: '/api/me', headers: bobHeaders })).json().user, null);
+    assert.equal((await query('SELECT * FROM bird.sessions WHERE user_id = $1', [bob])).rows.length, 0);
+    assert.equal((await query('SELECT automation_enabled FROM bird.settings WHERE user_id = $1', [bob])).rows[0].automation_enabled, false);
+    assert.equal((await setRole(bob, 'admin')).statusCode, 200);
+    assert.equal((await setRole(alice, 'editor', headers)).statusCode, 400);
+    assert.equal((await setRole(bob, 'editor')).statusCode, 200);
+    const audit = (await server.inject({ url: '/api/admin/users', headers })).json().audit;
+    assert.deepEqual(audit.map((event: any) => event.detail.to), ['editor', 'admin', 'disabled']);
+    console.log('PASS: role permissions, default-deny API routes, admin user management, audit log and session revocation');
+
     const login = await server.inject('/auth/login');
     const location = new URL(login.headers.location!);
     assert.equal(location.searchParams.get('code_challenge_method'), 'S256');
@@ -101,6 +134,7 @@ async function main() {
       assert.match(String(callback.headers['set-cookie']), /HttpOnly; SameSite=Lax.*Secure/);
       const replay = await server.inject({ url: `/auth/callback?state=${state}&code=unused`, headers: { cookie: binding } });
       assert.equal(replay.headers.location, '/?login=failed');
+      assert.equal((await query("SELECT role FROM bird.users WHERE google_sub = 'oauth-user'")).rows[0].role, 'editor');
     } finally { OAuth2Client.prototype.getToken = getToken; OAuth2Client.prototype.verifyIdToken = verify; }
     console.log('PASS: browser-bound OAuth state, PKCE, identity callback and replay rejection');
 

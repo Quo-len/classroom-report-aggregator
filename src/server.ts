@@ -11,6 +11,10 @@ import { ClassroomService } from './services/classroom.service';
 import { registerSettings } from './services/settings.service';
 import { executeWorkflow, runScheduledAccounts, Phase } from './services/workflow.service';
 import { timingSafeEqual } from 'crypto';
+import { can, permissionsFor, registerAdmin } from './services/rbac.service';
+
+// Routes every signed-in account may reach; every other /api route must declare a permission.
+const SESSION_ROUTES = new Set(['GET /api/me', 'POST /api/logout']);
 
 declare module 'fastify' {
   interface FastifyRequest { accountSession: Session | null; }
@@ -35,6 +39,11 @@ export async function createServer(): Promise<FastifyInstance> {
       request.headers['x-csrf-token'] !== request.accountSession.csrf_token)) {
       return reply.code(403).send({ error: 'Оновіть сторінку та спробуйте ще раз.' });
     }
+    if (SESSION_ROUTES.has(`${request.method} ${url}`)) return;
+    const permission = request.routeOptions.config?.permission;
+    if (!permission || !can(request.accountSession.role, permission)) {
+      return reply.code(403).send({ error: 'Ваша роль не дозволяє цю дію. Зверніться до адміністратора.' });
+    }
   });
   server.setErrorHandler((error, request, reply) => {
     const failure = error as { code?: string; statusCode?: number };
@@ -45,20 +54,22 @@ export async function createServer(): Promise<FastifyInstance> {
   server.register(fastifyStatic, { root: path.resolve('public'), prefix: '/' });
   registerAuth(server);
   registerSettings(server);
+  registerAdmin(server);
   server.get('/health', async () => ({ ok: true }));
   server.get('/api/me', async request => {
     const session = request.accountSession;
     if (!session) return { user: null };
     const settings = await database().query('SELECT value, automation_enabled FROM bird.settings WHERE user_id = $1', [session.user_id]);
-    return { user: { name: session.name, email: session.email, connected: session.connected }, csrfToken: session.csrf_token,
+    return { user: { name: session.name, email: session.email, connected: session.connected, role: session.role,
+      permissions: permissionsFor(session.role) }, csrfToken: session.csrf_token,
       settings: settings.rows[0]?.value || null, automationEnabled: settings.rows[0]?.automation_enabled || false };
   });
-  server.get('/api/runs', async request => {
+  server.get('/api/runs', { config: { permission: 'report:read' } }, async request => {
     const result = await database().query(`SELECT phase, status, sheet_url, message, started_at, finished_at
       FROM bird.runs WHERE user_id = $1 ORDER BY started_at DESC LIMIT 30`, [request.accountSession!.user_id]);
     return { runs: result.rows };
   });
-  server.post('/api/disconnect', async request => withAccountLock(request.accountSession!.user_id, async () => {
+  server.post('/api/disconnect', { config: { permission: 'account:self' } }, async request => withAccountLock(request.accountSession!.user_id, async () => {
     const userId = request.accountSession!.user_id;
     const result = await database().query('SELECT tokens FROM bird.users WHERE id = $1', [userId]);
     if (result.rows[0]?.tokens) {
@@ -72,7 +83,7 @@ export async function createServer(): Promise<FastifyInstance> {
     await database().query('UPDATE bird.settings SET automation_enabled = false WHERE user_id = $1', [userId]);
     return { ok: true };
   }));
-  server.get('/api/status', async request => withAccount(request.accountSession!.user_id, async () => {
+  server.get('/api/status', { config: { permission: 'report:read' } }, async request => withAccount(request.accountSession!.user_id, async () => {
     const assignment = await ClassroomService.getTargetAssignment();
     if (!assignment) return { assignment: null, teachers: [] };
     const submissions = await ClassroomService.getSubmissions(assignment.id);
@@ -81,7 +92,7 @@ export async function createServer(): Promise<FastifyInstance> {
       teachers: submissions.map(item => ({ name: item.studentName, email: item.studentEmail, hasSubmitted: item.hasSubmitted,
         attachments: item.attachments.map(file => file.title || 'Файл') })) };
   }));
-  server.post<{ Params: { phase: string } }>('/api/trigger/:phase', async (request, reply) => {
+  server.post<{ Params: { phase: string } }>('/api/trigger/:phase', { config: { permission: 'workflow:run' } }, async (request, reply) => {
     if (!['monitor', 'draft', 'reconcile', 'final', 'auto'].includes(request.params.phase)) {
       return reply.code(400).send({ error: 'Невідома дія.' });
     }
