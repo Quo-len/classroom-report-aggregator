@@ -38,11 +38,11 @@ export async function audit(actorId: string | null, targetId: string | null, act
 export function registerAdmin(server: FastifyInstance) {
   const manage = { config: { permission: 'users:manage' as const } };
 
-  server.get('/api/admin/users', manage, async () => {
-    const users = await database().query(`SELECT u.id, u.email, u.name, u.role, u.created_at, (u.tokens IS NOT NULL) AS connected,
+  server.get('/api/admin/users', manage, async request => {
+    const users = await database().query(`SELECT u.id, u.email, u.name, u.role, u.created_at, (u.id = $1) AS self, (u.tokens IS NOT NULL) AS connected,
         (s.user_id IS NOT NULL) AS configured, COALESCE(s.automation_enabled, false) AS automation_enabled,
         (SELECT max(r.started_at) FROM bird.runs r WHERE r.user_id = u.id) AS last_run_at
-      FROM bird.users u LEFT JOIN bird.settings s ON s.user_id = u.id ORDER BY u.created_at, u.id`);
+      FROM bird.users u LEFT JOIN bird.settings s ON s.user_id = u.id ORDER BY u.created_at, u.id`, [request.accountSession!.user_id]);
     const events = await database().query(`SELECT a.action, a.detail, a.created_at, actor.email AS actor, target.email AS target
       FROM bird.audit_log a LEFT JOIN bird.users actor ON actor.id = a.actor_id LEFT JOIN bird.users target ON target.id = a.target_id
       ORDER BY a.created_at DESC, a.id DESC LIMIT 20`);

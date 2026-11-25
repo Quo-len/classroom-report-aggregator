@@ -1,9 +1,16 @@
 const $ = id => document.getElementById(id);
 let csrfToken = '';
 let currentSettings = null;
+let me = null;
 let busy = false;
 const phaseNames = { draft: 'Чернетка та нагадування', reconcile: 'Звірка звіту', final: 'Фінальна здача', monitor: 'Перевірка подань' };
 const statusNames = { running: 'Виконується', completed: 'Завершено', failed: 'Помилка', needs_review: 'Потрібна перевірка доставки' };
+const roleNames = { admin: 'Адміністратор', editor: 'Редактор', viewer: 'Перегляд', disabled: 'Заблоковано' };
+const workspaceLabels = {
+  rootFolderUrl: 'Папка кафедри', reportsFolderUrl: 'Зведені звіти',
+  planSheetUrl: 'План роботи кафедри', sciPlanSheetUrl: 'План наукової роботи кафедри',
+};
+const allowed = permission => Boolean(me?.user.permissions.includes(permission));
 
 function message(text, error = false) {
   $('message').textContent = text;
@@ -23,21 +30,48 @@ async function api(url, options = {}) {
 }
 
 function showTab(name) {
-  for (const tab of ['dashboard', 'settings']) {
+  for (const tab of ['dashboard', 'settings', 'admin']) {
     $(tab).hidden = name !== tab;
     $(`${tab}-tab`).classList.toggle('active', name === tab);
     if (name === tab) $(`${tab}-tab`).setAttribute('aria-current', 'page');
     else $(`${tab}-tab`).removeAttribute('aria-current');
   }
+  if (name === 'admin') loadUsers();
+}
+
+function safeLink(url, hosts) {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:' && hosts.includes(parsed.hostname) ? parsed.href : null;
+  } catch { return null; }
 }
 
 function reportLink(url, element = $('report-link')) {
-  try {
-    const parsed = new URL(url);
-    if (parsed.origin !== 'https://docs.google.com' || !parsed.pathname.startsWith('/spreadsheets/d/')) return;
-    element.href = parsed.href;
-    element.hidden = false;
-  } catch { /* Invalid links are not rendered. */ }
+  const href = safeLink(url, ['docs.google.com']);
+  if (!href || !new URL(href).pathname.startsWith('/spreadsheets/d/')) return;
+  element.href = href;
+  element.hidden = false;
+}
+
+function renderWorkspace(workspace) {
+  const list = $('workspace-links');
+  list.replaceChildren();
+  for (const [key, label] of Object.entries(workspaceLabels)) {
+    const href = workspace && safeLink(workspace[key] || '', ['docs.google.com', 'drive.google.com']);
+    if (!href) continue;
+    const item = document.createElement('li');
+    const link = document.createElement('a');
+    link.href = href; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = `${label} ↗`;
+    item.append(link); list.append(item);
+  }
+  list.hidden = !list.children.length;
+}
+
+function renderCourse(course) {
+  $('course-resolved').hidden = !course;
+  $('course-resolved').classList.remove('error');
+  if (course) $('course-resolved').textContent = `✓ Обраний курс: ${course.name}`;
+  $('course-label').textContent = [course?.name, currentSettings?.ASSIGNMENT_NAME].filter(Boolean).join(' · ');
 }
 
 async function refresh() {
@@ -47,7 +81,7 @@ async function refresh() {
     const data = await api('/api/status');
     const assignment = data.assignment;
     $('assignment-title').textContent = assignment?.title || 'Завдання не знайдено';
-    $('assignment-dates').textContent = assignment ? `Опубліковано: ${assignment.creationDate} · Дедлайн: ${assignment.deadline}` : 'Перевірте назву завдання в налаштуваннях.';
+    $('assignment-dates').textContent = assignment ? `Опубліковано: ${assignment.creationDate} · Дедлайн: ${assignment.deadline}` : 'Перевірте назву завдання та курс у налаштуваннях.';
     $('submitted').textContent = data.teachers.filter(teacher => teacher.hasSubmitted).length;
     $('missing').textContent = data.teachers.filter(teacher => !teacher.hasSubmitted).length;
     $('days').textContent = assignment?.daysRemaining == null ? '—' : assignment.daysRemaining < 0 ? 'Минув' : assignment.daysRemaining;
@@ -92,38 +126,89 @@ async function history() {
 async function courses() {
   try {
     const data = await api('/api/courses');
-    $('course-select').replaceChildren(new Option('Оберіть курс', ''));
-    for (const course of data.courses) $('course-select').add(new Option(course.name, course.id));
-    if (currentSettings) $('course-select').value = currentSettings.CLASSROOM_COURSE_ID;
+    $('course-options').replaceChildren(...data.courses.map(course => new Option(course.name)));
     if (!data.courses.length) $('courses-help').textContent = 'Активних курсів не знайдено. Перевірте, чи ви ввійшли в обліковий запис викладача.';
+    else if (data.courses.length === 1 && !$('course-name').value) $('course-name').placeholder = data.courses[0].name;
   } catch (error) { message(error.message, true); }
 }
 
-function fileId(value) {
-  const text = value.trim();
-  if (!text.startsWith('https://')) return text;
+async function loadUsers() {
+  if (!allowed('users:manage')) return;
+  $('admin-refresh').disabled = true;
   try {
-    const url = new URL(text);
-    if (!['drive.google.com', 'docs.google.com'].includes(url.hostname)) return text;
-    return url.pathname.match(/\/(?:d|folders)\/([\w-]+)/)?.[1] || url.searchParams.get('id') || text;
-  } catch { return text; }
+    const data = await api('/api/admin/users');
+    $('users').replaceChildren();
+    for (const user of data.users) {
+      const row = document.createElement('tr');
+      const who = document.createElement('td'); who.textContent = user.name;
+      const email = document.createElement('small'); email.textContent = user.email; who.append(email);
+      const roleCell = document.createElement('td');
+      const select = document.createElement('select');
+      select.setAttribute('aria-label', `Роль: ${user.email}`);
+      for (const [value, label] of Object.entries(roleNames)) select.add(new Option(label, value, false, value === user.role));
+      select.disabled = user.self;
+      select.title = select.disabled ? 'Власну роль може змінити лише інший адміністратор' : '';
+      select.addEventListener('change', async () => {
+        select.disabled = true;
+        try {
+          await api(`/api/admin/users/${encodeURIComponent(user.id)}/role`, { method: 'PUT', body: JSON.stringify({ role: select.value }) });
+          message(`Роль ${user.email}: ${roleNames[select.value]}.`);
+        } catch (error) { message(error.message, true); }
+        await loadUsers();
+      });
+      roleCell.append(select);
+      const state = document.createElement('td');
+      for (const [flag, label] of [[user.connected, 'Google підключено'], [user.configured, 'Налаштовано'], [user.automation_enabled, 'Автоматизація']]) {
+        if (!flag) continue;
+        const chip = document.createElement('span'); chip.className = 'chip'; chip.textContent = label; state.append(chip);
+      }
+      if (!state.children.length) state.textContent = '—';
+      const last = document.createElement('td');
+      last.textContent = user.last_run_at ? new Date(user.last_run_at).toLocaleString('uk-UA') : '—';
+      row.append(who, roleCell, state, last); $('users').append(row);
+    }
+    $('audit').replaceChildren();
+    for (const event of data.audit) {
+      const item = document.createElement('li');
+      const change = event.action === 'role.changed'
+        ? `${event.actor || '—'} змінив(ла) роль ${event.target || '—'}: ${roleNames[event.detail.from] || event.detail.from} → ${roleNames[event.detail.to] || event.detail.to}`
+        : `${event.target || '—'} зареєструвався(лася) з роллю «${roleNames[event.detail.role] || event.detail.role}»`;
+      item.textContent = `${new Date(event.created_at).toLocaleString('uk-UA')} · ${change}`;
+      $('audit').append(item);
+    }
+    if (!data.audit.length) { const item = document.createElement('li'); item.className = 'muted'; item.textContent = 'Подій ще немає.'; $('audit').append(item); }
+  } catch (error) { message(error.message, true); }
+  finally { $('admin-refresh').disabled = false; }
+}
+
+function fillSettings(settings) {
+  const defaults = me.defaults;
+  const values = { ASSIGNMENT_NAME: defaults.ASSIGNMENT_NAME, HEAD_OF_DEPT_EMAIL: defaults.HEAD_OF_DEPT_EMAIL, ...(settings || {}) };
+  for (const [key, value] of Object.entries(values)) {
+    const field = $('settings-form').elements.namedItem(key);
+    if (field && typeof value === 'string') field.value = value;
+  }
 }
 
 $('settings-form').addEventListener('submit', async event => {
   event.preventDefault();
-  $('save-settings').disabled = true; message('Перевіряємо доступ до курсу й файлів…');
+  $('save-settings').disabled = true;
+  message('Шукаємо курс і готуємо папку на Google Диску…');
   try {
     const settings = Object.fromEntries(new FormData(event.target));
-    for (const key of ['STATIC_PLAN_SHEET_ID', 'STATIC_SCI_PLAN_SHEET_ID', 'MASTER_OUTPUT_FOLDER_ID']) settings[key] = fileId(settings[key]);
     const automationEnabled = $('automation-enabled').checked;
-    await api('/api/settings', { method: 'PUT', body: JSON.stringify({ settings, automationEnabled }) });
-    currentSettings = settings;
-    $('course-label').textContent = settings.ASSIGNMENT_NAME;
+    const result = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ settings, automationEnabled }) });
+    currentSettings = result.settings;
+    fillSettings(currentSettings);
+    renderCourse(result.course);
+    renderWorkspace(result.workspace);
     $('dashboard-tab').disabled = false;
     $('automation-status').textContent = automationEnabled ? 'Автоматизацію ввімкнено' : 'Ручне виконання';
-    message('Налаштування збережено.'); showTab('dashboard'); await refresh();
-  } catch (error) { message(error.message, true); }
-  finally { $('save-settings').disabled = false; }
+    message(`Налаштування збережено. Курс: ${result.course.name}.`); showTab('dashboard'); await refresh();
+  } catch (error) {
+    message(error.message, true);
+    $('course-resolved').hidden = false; $('course-resolved').classList.add('error'); $('course-resolved').textContent = error.message;
+  } finally { $('save-settings').disabled = false; }
 });
 
 for (const button of document.querySelectorAll('[data-phase]')) button.addEventListener('click', async () => {
@@ -139,8 +224,10 @@ for (const button of document.querySelectorAll('[data-phase]')) button.addEventL
   finally { busy = false; await refresh(); }
 });
 $('refresh').addEventListener('click', refresh);
+$('admin-refresh').addEventListener('click', loadUsers);
 $('dashboard-tab').addEventListener('click', () => showTab('dashboard'));
 $('settings-tab').addEventListener('click', () => showTab('settings'));
+$('admin-tab').addEventListener('click', () => showTab('admin'));
 $('logout').addEventListener('click', async () => {
   try { await api('/api/logout', { method: 'POST', body: '{}' }); location.assign('/'); }
   catch (error) { message(error.message, true); }
@@ -153,31 +240,38 @@ $('disconnect').addEventListener('click', async () => {
 
 async function initialize() {
   try {
-    const data = await api('/api/me');
-    if (!data.user) {
+    me = await api('/api/me');
+    if (!me.user) {
       $('login').hidden = false;
-      if (new URLSearchParams(location.search).get('login') === 'failed') message('Не вдалося підключити Google. Надайте потрібні дозволи та повторіть вхід.', true);
+      const reason = new URLSearchParams(location.search).get('login');
+      if (reason === 'failed') message('Не вдалося підключити Google. Надайте потрібні дозволи та повторіть вхід.', true);
+      if (reason === 'disabled') message('Ваш обліковий запис заблоковано. Зверніться до адміністратора.', true);
       return;
     }
-    csrfToken = data.csrfToken; currentSettings = data.settings;
-    $('account').hidden = false; $('account-name').textContent = data.user.email;
+    csrfToken = me.csrfToken; currentSettings = me.settings;
+    const canEdit = allowed('settings:write');
+    $('account').hidden = false; $('account-name').textContent = me.user.email;
+    $('account-role').textContent = roleNames[me.user.role] || me.user.role;
     $('workspace').hidden = false;
-    $('dashboard-tab').disabled = !currentSettings || !data.user.connected;
-    $('automation-enabled').checked = data.automationEnabled;
-    $('automation-status').textContent = data.automationEnabled ? 'Автоматизацію ввімкнено' : 'Ручне виконання';
-    if (currentSettings) {
-      for (const [key, value] of Object.entries(currentSettings)) {
-        const field = $('settings-form').elements.namedItem(key);
-        if (field) field.value = value;
-      }
-      $('course-label').textContent = currentSettings.ASSIGNMENT_NAME;
-    }
-    if (!data.user.connected) {
+    $('admin-tab').hidden = !allowed('users:manage');
+    $('readonly-note').hidden = canEdit;
+    $('settings-fields').disabled = !canEdit;
+    $('phase-actions').hidden = !allowed('workflow:run');
+    $('dashboard-tab').disabled = !currentSettings || !me.user.connected;
+    $('automation-enabled').checked = me.automationEnabled;
+    $('automation-status').textContent = me.automationEnabled ? 'Автоматизацію ввімкнено' : 'Ручне виконання';
+    $('default-assignment').textContent = `«${me.defaults.ASSIGNMENT_NAME}»`;
+    $('workspace-name').textContent = `«${me.defaults.WORKSPACE_FOLDER_NAME}»`;
+    fillSettings(currentSettings);
+    renderCourse(me.course);
+    renderWorkspace(me.workspace);
+    if (!me.user.connected) {
       showTab('settings'); message('Google від’єднано. Натисніть «Перепідключити Google», щоб продовжити.'); return;
     }
-    await courses();
+    if (canEdit) await courses();
     if (currentSettings) await refresh();
-    else { showTab('settings'); message('Ласкаво просимо! Оберіть курс і налаштуйте звіт.'); }
+    else if (canEdit) { showTab('settings'); message('Ласкаво просимо! Вкажіть назву курсу — папку й таблиці на Google Диску буде створено автоматично.'); }
+    else showTab('settings');
   } catch (error) { message(error.message, true); $('login').hidden = false; }
   finally { $('loading').hidden = true; }
 }

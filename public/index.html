@@ -11,7 +11,7 @@
 <body>
   <header class="app-header">
     <a class="brand" href="/" aria-label="Секретар кафедри — головна"><span class="brand-icon" aria-hidden="true">▤</span>Секретар кафедри</a>
-    <div id="account" hidden><span id="account-name"></span><button id="logout" class="text-button">Вийти</button></div>
+    <div id="account" hidden><span id="account-name"></span><span id="account-role" class="chip"></span><button id="logout" class="text-button">Вийти</button></div>
   </header>
   <main>
     <div id="message" role="status" aria-live="polite" hidden></div>
@@ -27,26 +27,30 @@
       <nav class="tabs" aria-label="Розділи">
         <button id="dashboard-tab" class="tab active" aria-current="page">Огляд</button>
         <button id="settings-tab" class="tab">Налаштування</button>
+        <button id="admin-tab" class="tab" hidden>Користувачі</button>
       </nav>
+      <div id="readonly-note" class="note" hidden>Ваша роль — «Перегляд»: можна переглядати подання та історію, але не змінювати налаштування чи запускати дії. Зверніться до адміністратора, щоб отримати права редактора.</div>
       <section id="dashboard">
         <div class="section-heading"><div><h1>Огляд подань</h1><p class="muted" id="course-label"></p></div><button id="refresh">Оновити</button></div>
         <div class="panel" id="assignment-panel"><h2 id="assignment-title">Завантаження завдання…</h2><p id="assignment-dates" class="muted"></p></div>
         <div class="stats"><div class="panel"><span class="muted">Подано</span><strong id="submitted">—</strong></div><div class="panel"><span class="muted">Очікуємо</span><strong id="missing">—</strong></div><div class="panel"><span class="muted">До дедлайну</span><strong id="days">—</strong></div></div>
         <section class="panel table-panel"><div class="panel-heading"><h2>Викладачі</h2><span id="teacher-count" class="muted small"></span></div><div class="table-scroll"><table><thead><tr><th>Викладач</th><th>Стан</th><th>Додані файли</th></tr></thead><tbody id="teachers"></tbody></table></div><p id="empty" class="empty" hidden>Подань поки немає.</p></section>
-        <section class="panel"><h2>Робота зі звітом</h2><p class="muted">Чернетка містить поточні дані. Звірка оновлює звіт, а фінальна здача надсилає його до наукового відділу.</p><div class="actions"><button data-phase="draft" class="primary">Створити чернетку й нагадати</button><button data-phase="reconcile">Оновити звіт</button><button data-phase="final">Надіслати фінальний звіт</button></div><p id="action-status" class="small" role="status"></p><a id="report-link" target="_blank" rel="noopener noreferrer" hidden>Відкрити Google-таблицю ↗</a></section>
+        <section class="panel"><h2>Робота зі звітом</h2><p class="muted">Чернетка містить поточні дані. Звірка оновлює звіт, а фінальна здача надсилає його до наукового відділу.</p><div class="actions" id="phase-actions"><button data-phase="draft" class="primary">Створити чернетку й нагадати</button><button data-phase="reconcile">Оновити звіт</button><button data-phase="final">Надіслати фінальний звіт</button></div><p id="action-status" class="small" role="status"></p><a id="report-link" target="_blank" rel="noopener noreferrer" hidden>Відкрити Google-таблицю ↗</a></section>
         <section class="panel"><div class="panel-heading"><h2>Історія виконання</h2><span id="automation-status" class="muted small"></span></div><ul id="history" class="history"><li class="muted">Виконань ще немає.</li></ul></section>
       </section>
       <section id="settings" hidden>
         <div class="section-heading"><div><h1>Налаштування кафедри</h1><p class="muted">Оберіть джерела та одержувачів вашого звіту.</p></div></div>
-        <form id="settings-form" class="panel">
+        <form id="settings-form" class="panel"><fieldset id="settings-fields">
           <h2>Google Classroom</h2>
-          <label>Курс<select name="CLASSROOM_COURSE_ID" id="course-select" required><option value="">Завантаження курсів…</option></select></label>
-          <p id="courses-help" class="muted small">Відображаються активні курси, у яких ви викладаєте.</p>
-          <label>Назва завдання<input name="ASSIGNMENT_NAME" required maxlength="300" value="Інформація про науково-дослідну роботу"></label>
-          <h2>Таблиці та папка звітів</h2><p class="muted small">Вставте посилання Google або ідентифікатор файлу.</p>
-          <label>План роботи кафедри<input name="STATIC_PLAN_SHEET_ID" required></label>
-          <label>План наукової роботи кафедри<input name="STATIC_SCI_PLAN_SHEET_ID" required></label>
-          <label>Папка для зведених звітів<input name="MASTER_OUTPUT_FOLDER_ID" required></label>
+          <label>Назва курсу<input name="COURSE_NAME" id="course-name" list="course-options" maxlength="300" autocomplete="off" placeholder="Наприклад: Кафедра інформатики"></label>
+          <datalist id="course-options"></datalist>
+          <p id="courses-help" class="muted small">Курс обирається автоматично серед активних курсів, у яких ви викладаєте. Достатньо частини назви; якщо курс один — поле можна залишити порожнім.</p>
+          <p id="course-resolved" class="small" hidden></p>
+          <label>Назва завдання<input name="ASSIGNMENT_NAME" id="assignment-name" maxlength="300"></label>
+          <p class="muted small">Порожнє поле — стандартна назва <span id="default-assignment"></span>.</p>
+          <h2>Папка на Google Диску</h2>
+          <p class="muted small" id="workspace-help">Під час збереження у вашому «Моєму диску» буде знайдено або створено папку <strong id="workspace-name"></strong> з підпапкою «Зведені звіти» та таблицями «План роботи кафедри» і «План наукової роботи кафедри». Заповніть плани — їхні рядки потраплять у звіт без змін.</p>
+          <ul id="workspace-links" class="link-list" hidden></ul>
           <h2>Сповіщення</h2><div class="form-grid">
           <label>Пошта завідувача кафедри<input type="email" name="HEAD_OF_DEPT_EMAIL" required></label>
           <label>Пошта наукового відділу<input type="email" name="SCI_DEPT_EMAIL" required></label></div>
@@ -54,8 +58,20 @@
           <p class="muted small">Одержувач має спочатку відкрити бота кафедри й натиснути «Розпочати». Chat ID надає адміністратор.</p>
           <label class="checkbox"><input type="checkbox" id="automation-enabled">Автоматично перевіряти дедлайни та надсилати звіти</label>
           <p class="muted small">Розклад працює після підключення адміністратором служби автоматизації.</p>
-          <div class="actions"><button class="primary" type="submit" id="save-settings">Зберегти налаштування</button><a class="button" href="/auth/login">Перепідключити Google</a><button type="button" id="disconnect" class="text-button">Від’єднати Google</button></div>
+          <div class="actions"><button class="primary" type="submit" id="save-settings">Зберегти налаштування</button></div>
+          </fieldset>
+          <div class="actions"><a class="button" href="/auth/login">Перепідключити Google</a><button type="button" id="disconnect" class="text-button">Від’єднати Google</button></div>
         </form>
+      </section>
+      <section id="admin" hidden>
+        <div class="section-heading"><div><h1>Користувачі та ролі</h1><p class="muted">Кожен користувач працює лише зі своїми курсом, папкою та звітами. Адміністратор бачить облікові записи, але не їхні дані.</p></div><button id="admin-refresh">Оновити</button></div>
+        <section class="panel table-panel"><div class="table-scroll"><table><thead><tr><th>Користувач</th><th>Роль</th><th>Стан</th><th>Останній запуск</th></tr></thead><tbody id="users"></tbody></table></div></section>
+        <section class="panel"><h2>Ролі</h2><ul class="roles muted small">
+          <li><strong>Адміністратор</strong> — власний звіт і керування ролями користувачів.</li>
+          <li><strong>Редактор</strong> — налаштування й запуск власного звіту.</li>
+          <li><strong>Перегляд</strong> — лише перегляд власних подань та історії.</li>
+          <li><strong>Заблоковано</strong> — вхід заборонено, сесії та автоматизацію вимкнено.</li></ul></section>
+        <section class="panel"><h2>Журнал змін</h2><ul id="audit" class="history"><li class="muted">Подій ще немає.</li></ul></section>
       </section>
     </section>
   </main>
