@@ -1,3 +1,4 @@
+import { apiError } from './api-error';
 import { deliverOnce } from './delivery.service';
 import { accountContext } from '../core/account-context';
 import { google, gmail_v1 } from 'googleapis';
@@ -119,7 +120,7 @@ export class NotifyService {
       return true;
     } catch (error) {
       if (accountContext.getStore()) throw error;
-      console.error(`❌ Failed to send email to [${options.to}]:`, error);
+      console.error(`❌ Failed to send email to [${options.to}]:`, apiError(error));
       return false;
     }
   }
@@ -144,7 +145,7 @@ export class NotifyService {
       return true;
     } catch (error) {
       if (accountContext.getStore()) throw error;
-      console.error(`❌ Error sending Telegram notification to [${chatId}]:`, error);
+      console.error(`❌ Error sending Telegram notification to [${chatId}]:`, apiError(error));
       return false;
     }
   }

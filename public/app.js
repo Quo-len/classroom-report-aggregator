@@ -74,13 +74,15 @@ async function refresh() {
 async function history() {
   const data = await api('/api/runs');
   $('history').replaceChildren();
+  $('report-link').hidden = true;
   for (const run of data.runs) {
     const item = document.createElement('li');
     item.textContent = `${new Date(run.started_at).toLocaleString('uk-UA')} · ${phaseNames[run.phase] || run.phase} · ${statusNames[run.status] || run.status}`;
     if (run.message) { const detail = document.createElement('div'); detail.className = 'muted small'; detail.textContent = run.message; item.append(detail); }
     if (run.sheet_url) {
       const link = document.createElement('a'); link.textContent = ' Відкрити звіт ↗'; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.hidden = true;
-      reportLink(run.sheet_url, link); item.append(link); reportLink(run.sheet_url);
+      reportLink(run.sheet_url, link); item.append(link);
+      if ($('report-link').hidden) reportLink(run.sheet_url);
     }
     $('history').append(item);
   }

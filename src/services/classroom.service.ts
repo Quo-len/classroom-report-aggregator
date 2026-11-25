@@ -1,3 +1,4 @@
+import { apiError } from './api-error';
 import { calendarDaysRemaining } from '../core/deadline';
 import { google, classroom_v1 } from 'googleapis';
 import { AuthService } from './auth.service';
@@ -165,7 +166,7 @@ export class ClassroomService {
 
       return result;
     } catch (error) {
-      console.error(`❌ Failed to list assignments from Classroom course ${env.CLASSROOM_COURSE_ID}:`, error);
+      console.error(`❌ Failed to list assignments from Classroom course ${env.CLASSROOM_COURSE_ID}:`, apiError(error));
       throw error;
     }
   }
@@ -205,7 +206,7 @@ export class ClassroomService {
       console.log(`👥 Total teachers/students enrolled in course: ${studentsMap.size}`);
       return studentsMap;
     } catch (error) {
-      console.error(`❌ Failed to fetch course students for course ${env.CLASSROOM_COURSE_ID}:`, error);
+      console.error(`❌ Failed to fetch course students for course ${env.CLASSROOM_COURSE_ID}:`, apiError(error));
       return studentsMap;
     }
   }
@@ -304,7 +305,7 @@ export class ClassroomService {
       console.log(`📊 Total teachers evaluated: ${submissions.length} (${submittedCount} submitted, ${submissions.length - submittedCount} pending)`);
       return submissions;
     } catch (error) {
-      console.error(`❌ Failed to retrieve submissions for courseWork ${courseWorkId}:`, error);
+      console.error(`❌ Failed to retrieve submissions for courseWork ${courseWorkId}:`, apiError(error));
       throw error;
     }
   }

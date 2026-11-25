@@ -1,3 +1,4 @@
+import { apiError } from './api-error';
 import { accountContext } from '../core/account-context';
 import fs from 'fs';
 import path from 'path';
@@ -93,7 +94,7 @@ export class DriveService {
       console.log(`✅ Found ${results.length} files in Google Drive folder [${folderId}]`);
       return results;
     } catch (error) {
-      console.error(`❌ Failed to list files in Google Drive folder [${folderId}]:`, error);
+      console.error(`❌ Failed to list files in Google Drive folder [${folderId}]:`, apiError(error));
       return results;
     }
   }
@@ -117,7 +118,7 @@ export class DriveService {
         webViewLink: res.data.webViewLink || undefined,
       };
     } catch (error) {
-      console.error(`⚠️ Failed to fetch metadata for file ID [${fileId}]:`, error);
+      console.error(`⚠️ Failed to fetch metadata for file ID [${fileId}]:`, apiError(error));
       return null;
     }
   }
@@ -142,7 +143,7 @@ export class DriveService {
       console.log(`✅ Downloaded [${filename}] (${(buffer.length / 1024).toFixed(1)} KB)`);
       return buffer;
     } catch (error) {
-      console.error(`❌ Error downloading file [${filename}] (ID: ${fileId}):`, error);
+      console.error(`❌ Error downloading file [${filename}] (ID: ${fileId}):`, apiError(error));
       return null;
     }
   }
@@ -158,7 +159,7 @@ export class DriveService {
       );
       return Buffer.from(res.data as ArrayBuffer);
     } catch (error) {
-      console.error(`Failed to export Google Doc [${fileId}] as DOCX:`, error);
+      console.error(`Failed to export Google Doc [${fileId}] as DOCX:`, apiError(error));
       return null;
     }
   }
@@ -179,7 +180,7 @@ export class DriveService {
       );
       return res.data as string;
     } catch (error) {
-      console.error(`❌ Error exporting Google Doc [${fileId}]:`, error);
+      console.error(`❌ Error exporting Google Doc [${fileId}]:`, apiError(error));
       return null;
     }
   }
@@ -210,7 +211,8 @@ export class DriveService {
 
       console.log(`📁 File [${fileId}] placed into master folder [${folderId}]`);
     } catch (error) {
-      console.error(`⚠️ Failed to move file [${fileId}] to folder [${folderId}]:`, error);
+      console.error(`⚠️ Failed to move file [${fileId}] to folder [${folderId}]:`, apiError(error));
+      if (accountContext.getStore()) throw error;
     }
   }
 
@@ -266,7 +268,7 @@ export class DriveService {
             }
           }
         } catch (err) {
-          console.error(`⚠️ Failed to collect JPEG attachments from [${att.title}] for ${sub.studentName}:`, err);
+          console.error(`⚠️ Failed to collect JPEG attachments from [${att.title}] for ${sub.studentName}:`, apiError(err));
         }
       }
     }

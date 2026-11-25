@@ -1,3 +1,4 @@
+import { apiError } from './api-error';
 import { accountContext } from '../core/account-context';
 import { database } from './database.service';
 import { google, sheets_v4 } from 'googleapis';
@@ -27,7 +28,7 @@ export class SheetsService {
 
       return response.data.values || [];
     } catch (error) {
-      console.error(`⚠️ Failed to read sheet [${spreadsheetId}]:`, error);
+      console.error(`⚠️ Failed to read sheet [${spreadsheetId}]:`, apiError(error));
       return [];
     }
   }
@@ -41,7 +42,7 @@ export class SheetsService {
       const res = await sheets.spreadsheets.get({ spreadsheetId });
       return res.data;
     } catch (error) {
-      console.error(`⚠️ Failed to get spreadsheet metadata [${spreadsheetId}]:`, error);
+      console.error(`⚠️ Failed to get spreadsheet metadata [${spreadsheetId}]:`, apiError(error));
       return null;
     }
   }
@@ -430,7 +431,7 @@ export class SheetsService {
       });
       console.log(`🎨 Applied 1-to-1 official template styling to Sheet 1 ("Підсумковий звіт")`);
     } catch (error) {
-      console.warn('⚠️ Warning: Non-fatal error while applying summary sheet styling:', error);
+      console.warn('⚠️ Warning: Non-fatal error while applying summary sheet styling:', apiError(error));
     }
   }
 
@@ -534,7 +535,7 @@ export class SheetsService {
       });
       console.log(`🎨 Applied detail formatting to Sheet 2 ("Деталізація по викладачах")`);
     } catch (error) {
-      console.warn('⚠️ Warning: Non-fatal error while applying detail sheet styling:', error);
+      console.warn('⚠️ Warning: Non-fatal error while applying detail sheet styling:', apiError(error));
     }
   }
 }

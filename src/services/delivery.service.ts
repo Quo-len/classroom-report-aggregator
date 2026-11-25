@@ -7,8 +7,8 @@ export async function deliverOnce(key: string, send: () => Promise<unknown>): Pr
   if (!runId) { await send(); return; }
   await assertWorkflowLock();
   const deliveryKey = hash(key);
-  const inserted = await database().query(`INSERT INTO bird.deliveries (run_id, delivery_key, status)
-    VALUES ($1, $2, 'sending') ON CONFLICT DO NOTHING RETURNING status`, [runId, deliveryKey]);
+  const inserted = await database().query(`INSERT INTO bird.deliveries (run_id, delivery_key, status, description)
+    VALUES ($1, $2, 'sending', $3) ON CONFLICT DO NOTHING RETURNING status`, [runId, deliveryKey, key]);
   if (!inserted.rowCount) {
     const existing = await database().query('SELECT status FROM bird.deliveries WHERE run_id = $1 AND delivery_key = $2', [runId, deliveryKey]);
     if (existing.rows[0]?.status === 'sent') return;

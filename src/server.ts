@@ -1,5 +1,5 @@
 import path from 'path';
-import Fastify, { FastifyInstance } from 'fastify';
+import Fastify, { FastifyInstance, LogController } from 'fastify';
 import fastifyStatic from '@fastify/static';
 import { getWebEnv } from './config/web-env';
 import { registerAuth, getSession, Session } from './services/session.service';
@@ -18,7 +18,7 @@ declare module 'fastify' {
 
 export async function createServer(): Promise<FastifyInstance> {
   const config = getWebEnv();
-  const server = Fastify({ logger: true, disableRequestLogging: true, bodyLimit: 32768 });
+  const server = Fastify({ logger: true, logController: new LogController({ disableRequestLogging: true }), bodyLimit: 32768 });
   server.decorateRequest('accountSession', null);
   server.addHook('onRequest', async (request, reply) => {
     reply.header('X-Content-Type-Options', 'nosniff');
