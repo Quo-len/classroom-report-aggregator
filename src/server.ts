@@ -24,6 +24,7 @@ export async function createServer(): Promise<FastifyInstance> {
     reply.header('Referrer-Policy', 'no-referrer');
     reply.header('X-Frame-Options', 'DENY');
     reply.header('Cache-Control', 'no-store');
+    reply.header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     const url = request.url.split('?')[0];
     if (!url.startsWith('/api/')) return;
     request.accountSession = await getSession(request);
@@ -50,6 +51,11 @@ export async function createServer(): Promise<FastifyInstance> {
     const settings = await database().query('SELECT value, automation_enabled FROM bird.settings WHERE user_id = $1', [session.user_id]);
     return { user: { name: session.name, email: session.email, connected: session.connected }, csrfToken: session.csrf_token,
       settings: settings.rows[0]?.value || null, automationEnabled: settings.rows[0]?.automation_enabled || false };
+  });
+  server.get('/api/runs', async request => {
+    const result = await database().query(`SELECT phase, status, sheet_url, message, started_at, finished_at
+      FROM bird.runs WHERE user_id = $1 ORDER BY started_at DESC LIMIT 30`, [request.accountSession!.user_id]);
+    return { runs: result.rows };
   });
   server.post('/api/disconnect', async request => {
     const userId = request.accountSession!.user_id;
