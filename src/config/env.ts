@@ -52,7 +52,7 @@ export function getEnv(): Config {
     
     console.error('❌ Environment configuration validation failed:\n' + errorDetails);
     console.error('\nPlease check your .env file or copy .env.example to .env and fill in the values.');
-    process.exit(1);
+    throw new Error('Environment configuration validation failed: ' + errorDetails);
   }
 
   cachedConfig = {

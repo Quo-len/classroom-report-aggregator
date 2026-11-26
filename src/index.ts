@@ -1,8 +1,10 @@
+import { withLocalRun } from './core/local-state';
+import { phaseFor } from './core/deadline';
 import { AuthService } from './services/auth.service';
 import { ClassroomService, CourseAssignment, StudentSubmissionItem } from './services/classroom.service';
 import { SheetsService } from './services/sheets.service';
 import { DriveService, DownloadedAsset } from './services/drive.service';
-import { NotifyService } from './services/notify.service';
+import { NotifyService, escapeHtml } from './services/notify.service';
 import { HealthService } from './services/health.service';
 import { Aggregator } from './core/aggregator';
 import { createServer } from './server';
@@ -95,7 +97,7 @@ export async function runDraftPhase(
   logInfo(`Preliminary master sheet generated: ${webViewLink}`);
 
   // 2. Send email reminder to teachers who have not submitted (48 hours left)
-  await NotifyService.sendMissingTeachersReminder(missingTeachers);
+  await NotifyService.sendMissingTeachersReminder(missingTeachers, assignment.deadline);
 
   // 3. Send Telegram and email to Head of Department with missing list
   await NotifyService.notifyHeadOfDeptMissingList(missingTeachers, webViewLink, aggregatedData.aiSummary);
@@ -135,10 +137,10 @@ export async function runReconcilePhase(
   // Send update to Head of Department
   const tgMsg = `
 <b>🔄 [Т-1 День] Звірення даних перед дедлайном</b>
-<b>Завдання:</b> ${assignment.title}
+<b>Завдання:</b> ${escapeHtml(assignment.title)}
 <b>Подано звітів:</b> ${submittedCount} з ${submissions.length} викладачів
-<b>Оновлений звіт:</b> <a href="${webViewLink}">Переглянути оновлений звіт</a>
-${aggregatedData.aiSummary ? `\n\n<b>Резюме:</b>\n<i>${aggregatedData.aiSummary}</i>` : ''}
+<b>Оновлений звіт:</b> <a href="${escapeHtml(webViewLink)}">Переглянути оновлений звіт</a>
+${aggregatedData.aiSummary ? `\n\n<b>Резюме:</b>\n<i>${escapeHtml(aggregatedData.aiSummary)}</i>` : ''}
   `.trim();
   await NotifyService.sendTelegramMessage(tgMsg);
 
@@ -203,27 +205,12 @@ export async function runAutoDailyWorkflow(): Promise<void> {
 
   const { assignment, submissions } = result;
 
-  if (assignment.daysRemaining === null) {
-    logInfo('No deadline specified for this assignment. Defaulting to general data aggregation.');
-    await runDraftPhase(assignment, submissions);
-    return;
-  }
+  const phase = phaseFor(assignment.deadline);
+  if (phase === 'monitor') return;
+  const action = () => ({ draft: runDraftPhase, reconcile: runReconcilePhase, final: runFinalPhase })[phase](assignment, submissions);
+  if (NotifyService.dryRun) await action();
+  else await withLocalRun(env.CLASSROOM_COURSE_ID, assignment.id, phase, action);
 
-  const days = assignment.daysRemaining;
-  logInfo(`Evaluated timeline: ${days} days remaining until deadline.`);
-
-  if (days <= 0) {
-    logInfo(`Deadline reached (${days} days remaining). Executing Final Delivery.`);
-    await runFinalPhase(assignment, submissions);
-  } else if (days === 1) {
-    logInfo(`T-minus 1 day remaining. Executing Reconciliation phase.`);
-    await runReconcilePhase(assignment, submissions);
-  } else if (days <= 3) {
-    logInfo(`T-minus ${days} days remaining. Executing Draft & Warn phase.`);
-    await runDraftPhase(assignment, submissions);
-  } else {
-    logInfo(`More than 3 days remaining (${days} days). Monitoring complete. No alerts needed today.`);
-  }
 }
 
 /**
@@ -307,11 +294,20 @@ async function main() {
     } else if (args.includes('--monitor')) {
       await runMonitoringPhase();
     } else if (args.includes('--draft')) {
-      await runDraftPhase();
+      const assignment = await ClassroomService.getTargetAssignment();
+      if (!assignment) throw new Error('Завдання не знайдено');
+      if (isDryRun) await runDraftPhase(assignment);
+      else await withLocalRun(env.CLASSROOM_COURSE_ID, assignment.id, 'draft', () => runDraftPhase(assignment));
     } else if (args.includes('--reconcile')) {
-      await runReconcilePhase();
+      const assignment = await ClassroomService.getTargetAssignment();
+      if (!assignment) throw new Error('Завдання не знайдено');
+      if (isDryRun) await runReconcilePhase(assignment);
+      else await withLocalRun(env.CLASSROOM_COURSE_ID, assignment.id, 'reconcile', () => runReconcilePhase(assignment));
     } else if (args.includes('--final')) {
-      await runFinalPhase();
+      const assignment = await ClassroomService.getTargetAssignment();
+      if (!assignment) throw new Error('Завдання не знайдено');
+      if (isDryRun) await runFinalPhase(assignment);
+      else await withLocalRun(env.CLASSROOM_COURSE_ID, assignment.id, 'final', () => runFinalPhase(assignment));
     } else if (args.includes('--auto') || args.length === 0) {
       await runAutoDailyWorkflow();
     } else {

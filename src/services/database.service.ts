@@ -35,10 +35,10 @@ export async function withAccountLock<T>(key: string, action: () => Promise<T>):
   // Dedicated connections prevent long-running locks from exhausting the query pool.
   if (!locks) {
     const options = database().options;
-    locks = new Pool({ ...options, max: 2 });
+    locks = new Pool({ ...options, max: 10, connectionTimeoutMillis: 1000 });
     locks.on('error', () => console.error('Workflow lock connection failed'));
   }
-  const client = await locks.connect();
+  const client = await locks.connect().catch(() => { throw Object.assign(new Error('Сервер зайнятий. Спробуйте пізніше.'), { statusCode: 409 }); });
   let locked = false;
   let connectionLost = false;
   const onError = () => { connectionLost = true; };

@@ -1,5 +1,6 @@
+import { accountContext } from '../core/account-context';
 import { apiError } from './api-error';
-import { calendarDaysRemaining } from '../core/deadline';
+import { calendarDaysRemaining, classroomDeadline } from '../core/deadline';
 import { google, classroom_v1 } from 'googleapis';
 import { AuthService } from './auth.service';
 import { DriveService } from './drive.service';
@@ -8,6 +9,7 @@ import { env } from '../config/env';
 export interface CourseAssignment {
   id: string;
   title: string;
+  courseName?: string;
   creationDate: Date;
   creationDateFormatted: string;
   deadline: Date | null;
@@ -49,16 +51,27 @@ export class ClassroomService {
     console.log(`🔍 Polling Google Classroom course [${env.CLASSROOM_COURSE_ID}] for assignment: "${env.ASSIGNMENT_NAME}"...`);
 
     try {
-      const res = await classroom.courses.courseWork.list({
-        courseId: env.CLASSROOM_COURSE_ID,
-        courseWorkStates: ['PUBLISHED'],
-        pageSize: 100,
+      const items: classroom_v1.Schema$CourseWork[] = [];
+      let pageToken: string | undefined;
+      do {
+        const response = await classroom.courses.courseWork.list({ courseId: env.CLASSROOM_COURSE_ID,
+          courseWorkStates: ['PUBLISHED'], pageSize: 100, pageToken });
+        items.push(...(response.data.courseWork || []));
+        pageToken = response.data.nextPageToken || undefined;
+      } while (pageToken);
+      const normalize = (value: string) => value.toLowerCase().replace(/\s+/g, ' ').trim();
+      const now = Date.now();
+      const matches = items.filter(work => normalize(work.title || '').includes(normalize(env.ASSIGNMENT_NAME)));
+      matches.sort((a, b) => {
+        const aDue = classroomDeadline(a)?.getTime();
+        const bDue = classroomDeadline(b)?.getTime();
+        const aOpen = aDue !== undefined && aDue > now;
+        const bOpen = bDue !== undefined && bDue > now;
+        if (aOpen !== bOpen) return aOpen ? -1 : 1;
+        if (aOpen && bOpen && aDue !== bDue) return aDue! - bDue!;
+        return Date.parse(b.creationTime || '') - Date.parse(a.creationTime || '');
       });
-
-      const items = res.data.courseWork || [];
-      const match = items.find(
-        (work) => work.title?.trim().toLowerCase() === env.ASSIGNMENT_NAME.trim().toLowerCase()
-      );
+      const match = matches[0];
 
       if (!match || !match.id) {
         console.warn(`⚠️ Assignment "${env.ASSIGNMENT_NAME}" not found in course ${env.CLASSROOM_COURSE_ID}. Available assignments:`,
@@ -68,20 +81,8 @@ export class ClassroomService {
       }
 
       const creationDate = match.creationTime ? new Date(match.creationTime) : new Date();
-      let deadline: Date | null = null;
-      let daysRemaining: number | null = null;
-
-      if (match.dueDate) {
-        const year = match.dueDate.year || new Date().getFullYear();
-        const month = (match.dueDate.month || 1) - 1;
-        const day = match.dueDate.day || 1;
-        const hours = match.dueTime?.hours ?? 23;
-        const minutes = match.dueTime?.minutes ?? 59;
-        const seconds = match.dueTime?.seconds ?? 59;
-
-        deadline = new Date(Date.UTC(year, month, day, hours, minutes, seconds));
-        daysRemaining = calendarDaysRemaining(deadline);
-      }
+      const deadline = classroomDeadline(match);
+      const daysRemaining = deadline ? calendarDaysRemaining(deadline) : null;
 
       // Detect linked Google Drive folder in assignment materials or description
       let driveFolderId: string | undefined = undefined;
@@ -122,16 +123,17 @@ export class ClassroomService {
       }
 
       // 3. Fallback to process.env if provided
-      if (!driveFolderId && process.env.ASSIGNMENT_ADDONS_FOLDER_URL) {
+      if (!accountContext.getStore() && !driveFolderId && process.env.ASSIGNMENT_ADDONS_FOLDER_URL) {
         driveFolderId = DriveService.extractDriveFolderId(process.env.ASSIGNMENT_ADDONS_FOLDER_URL) || undefined;
         driveFolderUrl = process.env.ASSIGNMENT_ADDONS_FOLDER_URL;
-      } else if (!driveFolderId && process.env.ASSIGNMENT_ADDONS_FOLDER_ID) {
+      } else if (!accountContext.getStore() && !driveFolderId && process.env.ASSIGNMENT_ADDONS_FOLDER_ID) {
         driveFolderId = process.env.ASSIGNMENT_ADDONS_FOLDER_ID;
         driveFolderUrl = `https://drive.google.com/drive/folders/${driveFolderId}`;
       }
 
       const result: CourseAssignment = {
         id: match.id,
+        courseName: accountContext.getStore()?.settings.COURSE_NAME || env.CLASSROOM_COURSE_NAME,
         title: match.title || env.ASSIGNMENT_NAME,
         creationDate,
         creationDateFormatted: creationDate.toLocaleDateString('uk-UA', {
@@ -207,7 +209,7 @@ export class ClassroomService {
       return studentsMap;
     } catch (error) {
       console.error(`❌ Failed to fetch course students for course ${env.CLASSROOM_COURSE_ID}:`, apiError(error));
-      return studentsMap;
+      throw error;
     }
   }
 

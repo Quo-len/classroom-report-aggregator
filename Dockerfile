@@ -15,5 +15,6 @@ COPY --from=builder /app/dist ./dist
 COPY public ./public
 COPY migrations ./migrations
 COPY templates ./templates
+USER node
 EXPOSE 3000
 CMD ["npm", "run", "start:web"]

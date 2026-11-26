@@ -1,3 +1,5 @@
+import { audit } from './rbac.service';
+import { phaseFor } from '../core/deadline';
 import { accountContext } from '../core/account-context';
 import { UserError } from './api-error';
 import { withAccount } from './account.service';
@@ -8,13 +10,6 @@ import { runDraftPhase, runReconcilePhase, runFinalPhase } from '../index';
 
 export type Phase = 'monitor' | 'draft' | 'reconcile' | 'final' | 'auto';
 
-export function phaseForDays(days: number | null): Exclude<Phase, 'auto'> {
-  if (days === null || days > 3) return 'monitor';
-  if (days <= 0) return 'final';
-  if (days === 1) return 'reconcile';
-  return 'draft';
-}
-
 export async function executeWorkflow(userId: string, requested: Phase, dryRun = false) {
   return withAccountLock(userId, () => withAccount(userId, async () => {
     const context = accountContext.getStore()!;
@@ -22,7 +17,7 @@ export async function executeWorkflow(userId: string, requested: Phase, dryRun =
     await WorkspaceService.ensure({ drive: true });
     const assignment = await ClassroomService.getTargetAssignment();
     if (!assignment) throw new UserError(`Завдання «${context.settings.ASSIGNMENT_NAME}» не знайдено в обраному курсі.`, 404);
-    const phase = requested === 'auto' ? phaseForDays(assignment.daysRemaining) : requested;
+    const phase = requested === 'auto' ? phaseFor(assignment.deadline) : requested;
     if (phase === 'monitor') return { ok: true, message: 'Перевірку завершено. Звіт за розкладом ще не потрібний.' };
     context.assignmentId = assignment.id;
     if (dryRun) {
@@ -32,7 +27,7 @@ export async function executeWorkflow(userId: string, requested: Phase, dryRun =
     }
     const courseId = context.settings.CLASSROOM_COURSE_ID!;
     const previous = await database().query(`SELECT id, status, sheet_url FROM bird.runs
-      WHERE user_id = $1 AND course_id = $2 AND assignment_id = $3 AND phase = $4`, [userId, courseId, assignment.id, phase]);
+      WHERE user_id = $1 AND course_id = $2 AND assignment_id = $3 AND phase = $4 ORDER BY started_at DESC, id DESC LIMIT 1`, [userId, courseId, assignment.id, phase]);
     const last = previous.rows[0];
     if (last?.status === 'completed' && (requested === 'auto' || phase !== 'reconcile')) {
       return { ok: true, sheetUrl: last.sheet_url, message: 'Цей етап уже виконано. Повторні сповіщення не надсилалися.' };
@@ -44,16 +39,22 @@ export async function executeWorkflow(userId: string, requested: Phase, dryRun =
         throw Object.assign(new Error('Notification delivery requires review'), { statusCode: 409 });
       }
     }
-    const run = await database().query(`INSERT INTO bird.runs (user_id, course_id, assignment_id, phase, status)
-      VALUES ($1, $2, $3, $4, 'running') ON CONFLICT (user_id, course_id, assignment_id, phase)
-      DO UPDATE SET status = 'running', started_at = now(), finished_at = NULL, message = NULL RETURNING id`, [userId, courseId, assignment.id, phase]);
-    context.runId = run.rows[0].id;
+    if (last && last.status !== 'completed') {
+      context.runId = last.id;
+      await database().query("UPDATE bird.runs SET status = 'running', finished_at = NULL, message = NULL WHERE id = $1", [last.id]);
+    } else {
+      const run = await database().query(`INSERT INTO bird.runs (user_id, course_id, assignment_id, phase, status)
+        VALUES ($1, $2, $3, $4, 'running') RETURNING id`, [userId, courseId, assignment.id, phase]);
+      context.runId = run.rows[0].id;
+    }
+    await audit(userId, userId, 'workflow.started', { phase, runId: context.runId });
     try {
       const submissions = await ClassroomService.getSubmissions(assignment.id);
       const actions = { draft: runDraftPhase, reconcile: runReconcilePhase, final: runFinalPhase };
       const sheetUrl = await actions[phase](assignment, submissions);
       if (!sheetUrl) throw new Error('Report generation failed');
       await database().query("UPDATE bird.runs SET status = 'completed', sheet_url = $2, finished_at = now() WHERE id = $1", [context.runId, sheetUrl]);
+      await audit(userId, userId, 'workflow.completed', { phase, runId: context.runId });
       return { ok: true, sheetUrl, message: 'Звіт оновлено. Сповіщення надіслано відповідно до етапу.' };
     } catch (error) {
       await database().query(`UPDATE bird.runs SET status = CASE WHEN EXISTS

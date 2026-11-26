@@ -1,3 +1,4 @@
+import { OFFICIAL_INDICATORS } from '../config/official-template';
 import https from 'https';
 import { DocParserService, DigestedTeacherEvidence } from './doc-parser.service';
 import { env } from '../config/env';
@@ -13,13 +14,13 @@ export interface AISummaryInput {
 }
 
 export class AIService {
-  public static model: string = 'qwen/qwen3.8-27b';
+  public static get model(): string { return process.env.GROQ_MODEL || ''; }
 
   /**
    * Checks if Groq AI service is enabled and configured
    */
   public static isAvailable(): boolean {
-    return Boolean(env.GROQ_API_KEY && env.GROQ_API_KEY.trim().length > 0);
+    return Boolean(process.env.GROQ_API_KEY?.trim() && this.model);
   }
 
   /**
@@ -152,7 +153,7 @@ ${text.slice(0, 8000)}
         const parsedObj = JSON.parse(rawJson);
         for (const [key, val] of Object.entries(parsedObj)) {
           const num = DocParserService.parseNumber(val);
-          if (num > 0) {
+          if (num > 0 && OFFICIAL_INDICATORS.includes(key)) {
             metrics.set(key, num);
           }
         }

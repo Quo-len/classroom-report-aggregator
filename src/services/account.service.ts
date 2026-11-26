@@ -36,8 +36,9 @@ export async function saveTokens(userId: string, tokens: Credentials, expectedVe
 
 export async function withAccount<T>(userId: string, action: () => Promise<T>, dryRun = false, requireSettings = true): Promise<T> {
   const result = await database().query(`SELECT u.tokens, u.auth_version, s.value, w.course_id, w.root_folder_id, w.reports_folder_id,
-      w.plan_sheet_id, w.sci_plan_sheet_id
-    FROM bird.users u LEFT JOIN bird.settings s ON s.user_id = u.id LEFT JOIN bird.workspaces w ON w.user_id = u.id WHERE u.id = $1`, [userId]);
+      w.plan_sheet_id, w.sci_plan_sheet_id, t.chat_id AS verified_chat_id
+    FROM bird.users u LEFT JOIN bird.settings s ON s.user_id = u.id LEFT JOIN bird.workspaces w ON w.user_id = u.id
+    LEFT JOIN bird.telegram_bindings t ON t.user_id = u.id WHERE u.id = $1`, [userId]);
   const row = result.rows[0];
   if (!row?.tokens) throw new Error('Reconnect your Google account');
   if (requireSettings && !row.value) throw new Error('Complete account setup first');
@@ -56,6 +57,7 @@ export async function withAccount<T>(userId: string, action: () => Promise<T>, d
       rootFolderId: row.root_folder_id || undefined, reportsFolderId: row.reports_folder_id || undefined,
       planSheetId: row.plan_sheet_id || undefined, sciPlanSheetId: row.sci_plan_sheet_id || undefined,
     }) };
+    settings.HEAD_OF_DEPT_CHAT_ID = row.verified_chat_id || '';
     return await accountContext.run({ userId, auth, settings, dryRun }, action);
   } finally {
     await pending;

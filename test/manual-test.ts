@@ -16,6 +16,8 @@ async function runManualTest() {
   console.log('   🧪 РУЧНЕ ТЕСТУВАННЯ СИСТЕМИ (MANUAL TESTING PIPELINE)');
   console.log('================================================================\n');
 
+  const dryRun = process.argv.includes('--dry-run');
+  if (dryRun) process.env.GROQ_API_KEY = '';
   const docsDir = path.resolve('test/docs');
   if (!fs.existsSync(docsDir)) {
     console.error(`❌ Папку з тестовими документами не знайдено: ${docsDir}`);
@@ -108,7 +110,7 @@ async function runManualTest() {
         // If it's narrative text, test AI extraction
         if (f.includes('Ковальчук')) {
           console.log(`    🤖 [Groq AI] Аналіз неструктурованого тексту для ${t.name}...`);
-          const text = buf.toString('utf-8');
+          const text = DocParserService.parseDocxBuffer(buf).fullText;
           const aiMetrics = await AIService.extractMetricsFromText(text, t.name);
           for (const [k, v] of aiMetrics.entries()) {
             metrics.set(k, (metrics.get(k) || 0) + v);
@@ -116,27 +118,7 @@ async function runManualTest() {
         }
       } else if (f.endsWith('.xlsx')) {
         const rows = DocParserService.parseXlsxBuffer(buf);
-        for (const row of rows) {
-          if (!row || row.length < 2) continue;
-          const indicatorName = String(row[0] || '').trim();
-          if (!indicatorName || DocParserService.isNonIndicatorOrGarbage(indicatorName)) {
-            continue;
-          }
-          let metricVal = 0;
-          let foundValue = false;
-          for (let c = 1; c < row.length; c++) {
-            const cell = row[c];
-            if (cell !== undefined && cell !== null && String(cell).trim() !== '') {
-              metricVal = Aggregator.parseCellNumber(cell);
-              foundValue = true;
-              break;
-            }
-          }
-          // Only store if positive metric value
-          if (foundValue && metricVal > 0) {
-            metrics.set(indicatorName, (metrics.get(indicatorName) || 0) + metricVal);
-          }
-        }
+        metrics = Aggregator.metricsFromRows(rows);
       }
 
       for (const [key, val] of metrics.entries()) {
@@ -275,8 +257,8 @@ async function runManualTest() {
   // Save preview to test/docs/PREVIEW_REPORT.txt
   const previewPath = path.join(docsDir, 'PREVIEW_REPORT.txt');
   const previewLines = grid.map((row) => row.join('\t')).join('\n');
-  fs.writeFileSync(previewPath, previewLines, 'utf-8');
-  console.log(`  💾 Текстовий зразок звіту збережено у: ${previewPath}`);
+  if (!dryRun) fs.writeFileSync(previewPath, previewLines, 'utf-8');
+  if (!dryRun) console.log(`  💾 Текстовий зразок звіту збережено у: ${previewPath}`);
 
   console.log('\n================================================================');
   console.log('   🎉 РУЧНЕ ТЕСТУВАННЯ УСПІШНО ЗАВЕРШЕНО БЕЗ ПОМИЛОК!');

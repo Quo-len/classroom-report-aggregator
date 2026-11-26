@@ -10,7 +10,7 @@ import { encrypt, decrypt } from '../src/services/token-crypto';
 import { accountContext } from '../src/core/account-context';
 import { deliverOnce } from '../src/services/delivery.service';
 import { calendarDaysRemaining } from '../src/core/deadline';
-import { phaseForDays, executeWorkflow } from '../src/services/workflow.service';
+import { executeWorkflow } from '../src/services/workflow.service';
 import { ClassroomService } from '../src/services/classroom.service';
 import { Aggregator } from '../src/core/aggregator';
 import { SheetsService } from '../src/services/sheets.service';
@@ -19,6 +19,8 @@ import { SCOPES } from '../src/services/auth.service';
 import { google } from 'googleapis';
 import { WorkspaceService } from '../src/services/workspace.service';
 import { UserError } from '../src/services/api-error';
+import { database, withAccountLock } from '../src/services/database.service';
+import { migrate } from '../src/migrate';
 
 // All queries go to this disposable PostgreSQL engine, never the developer's database.
 Object.assign(process.env, {
@@ -32,6 +34,11 @@ async function main() {
   const originalQuery = Pool.prototype.query, originalConnect = Pool.prototype.connect;
   const originalEnd = Pool.prototype.end;
   const query = async (sql: string, params?: unknown[]) => {
+    if (!params && /;\s*\S/.test(sql)) {
+      const results = await db.exec(sql);
+      const last = results[results.length - 1];
+      return { rows: last?.rows || [], rowCount: last?.affectedRows || 0 };
+    }
     const result = await db.query(sql, params);
     return { rows: result.rows, rowCount: result.affectedRows || result.rows.length };
   };
@@ -46,6 +53,16 @@ async function main() {
       }
     }
     console.log('PASS: migrations apply and can be rerun');
+    await migrate();
+    const migrationCount = (await query('SELECT * FROM bird.schema_migrations')).rows.length;
+    await migrate();
+    assert.equal((await query('SELECT * FROM bird.schema_migrations')).rows.length, migrationCount);
+    assert.ok(migrationCount >= 6);
+    assert.equal((database().options.ssl as any).rejectUnauthorized, Boolean(process.env.DATABASE_CA));
+    const lockConnect = Pool.prototype.connect;
+    Pool.prototype.connect = (async () => { throw new Error('pool exhausted'); }) as any;
+    try { await assert.rejects(withAccountLock('busy', async () => {}), (error: any) => error.statusCode === 409); }
+    finally { Pool.prototype.connect = lockConnect; }
     const users = await query("INSERT INTO bird.users (google_sub, email, name) VALUES ('alice', 'alice@example.com', 'Alice'), ('bob', 'bob@example.com', 'Bob') RETURNING id");
     const alice = (users.rows[0] as any).id, bob = (users.rows[1] as any).id;
     const encrypted = encrypt({ refresh_token: 'private' }, alice);
@@ -148,6 +165,19 @@ async function main() {
       assert.equal(aliceMe.settings.HEAD_OF_DEPT_EMAIL, 'new-head@example.com');
       assert.equal(aliceMe.defaults.HEAD_OF_DEPT_EMAIL, 'alice@example.com');
       assert.equal(aliceMe.workspace.rootFolderUrl, `https://drive.google.com/drive/folders/${alice}-root`);
+      process.env.TELEGRAM_BOT_TOKEN = 'test';
+      process.env.TELEGRAM_WEBHOOK_SECRET = 'webhook-secret';
+      assert.equal((await put({ ...base, HEAD_OF_DEPT_CHAT_ID: '999' })).statusCode, 400);
+      const telegramToken = secret();
+      await query("INSERT INTO bird.telegram_bindings (user_id, token_hash, expires_at) VALUES ($1, $2, now() + interval '10 minutes')", [alice, hash(telegramToken)]);
+      const telegramPayload = { message: { text: `/start ${telegramToken}`, chat: { id: 123, type: 'private' } } };
+      assert.equal((await server.inject({ method: 'POST', url: '/internal/telegram', payload: telegramPayload })).statusCode, 401);
+      assert.equal((await server.inject({ method: 'POST', url: '/internal/telegram', headers: { 'x-telegram-bot-api-secret-token': 'webhook-secret' }, payload: telegramPayload })).statusCode, 200);
+      assert.equal((await query('SELECT chat_id FROM bird.telegram_bindings WHERE user_id = $1', [alice])).rows[0].chat_id, '123');
+      assert.equal((await query('SELECT * FROM bird.telegram_bindings WHERE user_id = $1', [bob])).rows.length, 0);
+      await server.inject({ method: 'POST', url: '/internal/telegram', headers: { 'x-telegram-bot-api-secret-token': 'webhook-secret' }, payload: { message: { ...telegramPayload.message, chat: { id: 999, type: 'private' } } } });
+      assert.equal((await query('SELECT chat_id FROM bird.telegram_bindings WHERE user_id = $1', [alice])).rows[0].chat_id, '123', 'binding token cannot be replayed');
+      assert.ok((await query("SELECT 1 FROM bird.audit_log WHERE actor_id = $1 AND action = 'settings.updated'", [alice])).rows.length);
       await withAccount(alice, async () => {
         const settings = accountContext.getStore()!.settings;
         assert.equal(settings.CLASSROOM_COURSE_ID, 'resolved-course');
@@ -203,7 +233,6 @@ async function main() {
 
     assert.equal(calendarDaysRemaining(new Date('2026-11-25T10:00:00Z'), new Date('2026-11-24T23:00:00Z')), 0);
     assert.equal(calendarDaysRemaining(new Date('2026-03-30T10:00:00Z'), new Date('2026-03-27T10:00:00Z')), 3);
-    assert.deepEqual([null, 5, 3, 2, 1, 0, -1].map(phaseForDays), ['monitor', 'monitor', 'draft', 'draft', 'reconcile', 'final', 'final']);
 
     const originals = { assignment: ClassroomService.getTargetAssignment, submissions: ClassroomService.getSubmissions,
       aggregate: Aggregator.aggregateAll, summary: Aggregator.buildSummaryGrid, detail: Aggregator.buildDetailGrid,
@@ -211,7 +240,7 @@ async function main() {
       ensure: WorkspaceService.ensure };
     let reports = 0, ensured = 0;
     WorkspaceService.ensure = async () => { ensured++; return { course: { id: 'alice-course', name: 'Alice' }, workspace: {} }; };
-    ClassroomService.getTargetAssignment = async () => ({ id: 'workflow-assignment', daysRemaining: 3, title: 'Test' } as any);
+    ClassroomService.getTargetAssignment = async () => ({ id: 'workflow-assignment', deadline: new Date(Date.now() + 3 * 86400000), daysRemaining: 3, title: 'Test' } as any);
     ClassroomService.getSubmissions = async () => [];
     Aggregator.aggregateAll = async () => ({} as any);
     Aggregator.buildSummaryGrid = () => [];
@@ -224,6 +253,15 @@ async function main() {
       await executeWorkflow(alice, 'auto');
       assert.equal(reports, 1);
       assert.equal(ensured, 2, 'every workflow run validates the Drive workspace');
+      const originalTelegram = NotifyService.sendTelegramMessage;
+      NotifyService.sendTelegramMessage = async () => true;
+      try {
+        await executeWorkflow(alice, 'reconcile');
+        await executeWorkflow(alice, 'reconcile');
+        const repeated = await query("SELECT id FROM bird.runs WHERE user_id = $1 AND phase = 'reconcile'", [alice]);
+        assert.equal(repeated.rows.length, 2);
+        assert.ok((await query("SELECT 1 FROM bird.audit_log WHERE actor_id = $1 AND action = 'workflow.completed'", [alice])).rows.length);
+      } finally { NotifyService.sendTelegramMessage = originalTelegram; }
       await withAccount(alice, async () => assert.equal(accountContext.getStore()!.settings.CLASSROOM_COURSE_ID, 'alice-course'));
       await assert.rejects(withAccount(bob, async () => {}));
     } finally {
@@ -269,6 +307,10 @@ async function main() {
       assert.equal(decrypt<any>((refreshed.rows[0] as any).tokens, alice).refresh_token, 'refresh');
     } finally { OAuth2Client.prototype.getAccessToken = accessToken; }
     console.log('PASS: report reuse across phases and persisted token refresh events');
+    for (let i = 0; i < 10; i++) await server.inject('/auth/login');
+    assert.equal((await server.inject('/auth/login')).statusCode, 429);
+    for (let i = 0; i < 10; i++) await server.inject({ method: 'POST', url: '/api/trigger/invalid', headers, payload: {} });
+    assert.equal((await server.inject({ method: 'POST', url: '/api/trigger/invalid', headers, payload: {} })).statusCode, 429);
     assert.equal((await server.inject({ method: 'POST', url: '/api/logout', headers, payload: {} })).statusCode, 200);
     assert.equal((await server.inject({ url: '/api/me', headers: { cookie } })).json().user, null);
     console.log('Hosted integration tests passed');

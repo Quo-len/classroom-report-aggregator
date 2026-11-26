@@ -54,8 +54,9 @@
           <h2>Сповіщення</h2><div class="form-grid">
           <label>Пошта завідувача кафедри<input type="email" name="HEAD_OF_DEPT_EMAIL" required></label>
           <label>Пошта наукового відділу<input type="email" name="SCI_DEPT_EMAIL" required></label></div>
-          <label>Telegram chat ID <span class="muted">(необов’язково)</span><input name="HEAD_OF_DEPT_CHAT_ID" pattern="-?[0-9]*"></label>
-          <p class="muted small">Одержувач має спочатку відкрити бота кафедри й натиснути «Розпочати». Chat ID надає адміністратор.</p>
+          <label>Telegram chat ID <span class="muted">(необов’язково)</span><input name="HEAD_OF_DEPT_CHAT_ID" readonly></label>
+          <p class="muted small">Натисніть «Підключити Telegram», відкрийте бота та натисніть «Розпочати». Потім оновіть сторінку.</p>
+          <button type="button" id="connect-telegram">Підключити Telegram</button><a id="telegram-link" target="_blank" rel="noopener noreferrer" hidden>Відкрити бота</a>
           <label class="checkbox"><input type="checkbox" id="automation-enabled">Автоматично перевіряти дедлайни та надсилати звіти</label>
           <p class="muted small">Розклад працює після підключення адміністратором служби автоматизації.</p>
           <div class="actions"><button class="primary" type="submit" id="save-settings">Зберегти налаштування</button></div>

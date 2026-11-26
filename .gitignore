@@ -40,3 +40,7 @@ temp/
 .vscode/
 *.swp
 *.swo
+
+state.json
+state.json.tmp
+state.json.lock

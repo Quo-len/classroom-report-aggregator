@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { apiError } from './api-error';
 import { deliverOnce } from './delivery.service';
 import { accountContext } from '../core/account-context';
@@ -12,6 +13,10 @@ export interface EmailOptions {
   subject: string;
   bodyHtml: string;
   attachments?: DownloadedAsset[];
+}
+
+export function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]!));
 }
 
 export class NotifyService {
@@ -119,9 +124,8 @@ export class NotifyService {
       console.log(`✅ Email successfully sent to [${recipients}]`);
       return true;
     } catch (error) {
-      if (accountContext.getStore()) throw error;
       console.error(`❌ Failed to send email to [${options.to}]:`, apiError(error));
-      return false;
+      throw error;
     }
   }
 
@@ -140,25 +144,25 @@ export class NotifyService {
     try {
       console.log(`📱 Sending Telegram notification to chat [${chatId}]...`);
       const bot = this.getTelegramBot();
-      await deliverOnce(`telegram:${chatId}`, () => bot.telegram.sendMessage(chatId, text, { parse_mode: 'HTML' }));
+      await deliverOnce(`telegram:${chatId}:${createHash('sha256').update(text).digest('hex')}`, () => bot.telegram.sendMessage(chatId, text, { parse_mode: 'HTML' }));
       console.log(`✅ Telegram message sent successfully to [${chatId}]`);
       return true;
     } catch (error) {
-      if (accountContext.getStore()) throw error;
       console.error(`❌ Error sending Telegram notification to [${chatId}]:`, apiError(error));
-      return false;
+      throw error;
     }
   }
 
   /**
    * Workflow Notification: T-minus 3 Days Reminder to Missing Teachers
    */
-  public static async sendMissingTeachersReminder(teachers: { name: string; email: string }[]): Promise<void> {
+  public static async sendMissingTeachersReminder(teachers: { name: string; email: string }[], deadline?: Date | null): Promise<void> {
     if (teachers.length === 0) {
       console.log('🎉 No missing teachers! All reports have been submitted.');
       return;
     }
 
+    const remaining = deadline ? `до ${deadline.toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv' })}` : 'термін у Google Classroom';
     console.log(`📢 Sending reminder email to ${teachers.length} teachers with pending submissions...`);
 
     for (const teacher of teachers) {
@@ -169,10 +173,10 @@ export class NotifyService {
 
       const bodyHtml = `
         <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-          <h2 style="color: #c0392b;">Шановний(а) ${teacher.name}!</h2>
-          <p>Нагадуємо, що в Google Classroom опубліковано завдання: <strong>«${env.ASSIGNMENT_NAME}»</strong>.</p>
+          <h2 style="color: #c0392b;">Шановний(а) ${escapeHtml(teacher.name)}!</h2>
+          <p>Нагадуємо, що в Google Classroom опубліковано завдання: <strong>«${escapeHtml(env.ASSIGNMENT_NAME)}»</strong>.</p>
           <p style="background-color: #fff3cd; padding: 12px; border-left: 5px solid #ffc107; font-size: 15px;">
-            ⚠️ <strong>Увага:</strong> До кінцевого терміну здачі звіту залишилося <strong>менше 48 годин</strong>!
+            ⚠️ <strong>Увага:</strong> Кінцевий термін здачі звіту: <strong>${escapeHtml(remaining)}</strong>!
           </p>
           <p>Будь ласка, завантажте ваш звіт про науково-дослідну роботу якомога швидше для своєчасного формування кафедрального зведеного звіту.</p>
           <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
@@ -182,7 +186,7 @@ export class NotifyService {
 
       await this.sendEmail({
         to: teacher.email,
-        subject: `[Терміново: 48 годин] Нагадування про здачу звіту: ${env.ASSIGNMENT_NAME}`,
+        subject: `[Нагадування про дедлайн] Нагадування про здачу звіту: ${env.ASSIGNMENT_NAME}`,
         bodyHtml,
       });
     }
@@ -197,25 +201,25 @@ export class NotifyService {
     aiSummary?: string
   ): Promise<void> {
     const namesList = missingTeachers.length > 0
-      ? missingTeachers.map((t, idx) => `${idx + 1}. ${t.name} (${t.email || 'без email'})`).join('\n')
+      ? missingTeachers.map((t, idx) => `${idx + 1}. ${escapeHtml(t.name)} (${escapeHtml(t.email || 'без email')})`).join('\n')
       : 'Усі викладачі вчасно подали звіти!';
 
     const summarySection = aiSummary
-      ? `\n\n<b>Резюме кафедри:</b>\n<i>${aiSummary}</i>`
+      ? `\n\n<b>Резюме кафедри:</b>\n<i>${escapeHtml(aiSummary)}</i>`
       : '';
 
     // Telegram message
     const tgMessage = `
 <b>📋 [Т-3 Дні] Попередній стан подання звітів</b>
 
-<b>Завдання:</b> ${env.ASSIGNMENT_NAME}
-<b>Попередній звіт:</b> <a href="${preliminarySheetUrl}">Переглянути Google Sheet</a>
+<b>Завдання:</b> ${escapeHtml(env.ASSIGNMENT_NAME)}
+<b>Попередній звіт:</b> <a href="${escapeHtml(preliminarySheetUrl)}">Переглянути Google Sheet</a>
 
 <b>⚠️ Не подали звіт (${missingTeachers.length} викладачів):</b>
 ${namesList}
 ${summarySection}
 
-<i>Викладачам надіслано автоматичне попередження (залишилось 48 годин).</i>
+<i>Викладачам надіслано автоматичне попередження (термін вказано в Google Classroom).</i>
     `.trim();
 
     await this.sendTelegramMessage(tgMessage);
@@ -224,15 +228,15 @@ ${summarySection}
     const htmlEmail = `
       <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
         <h2 style="color: #2c3e50;">Попередній звіт про стан подання наукових звітів (Т-3 дні)</h2>
-        <p>Завдання: <strong>«${env.ASSIGNMENT_NAME}»</strong></p>
-        ${aiSummary ? `<div style="background-color: #e8f4f8; padding: 12px; border-left: 4px solid #2980b9; margin: 15px 0;"><strong>Аналітичне резюме:</strong><br/>${aiSummary}</div>` : ''}
+        <p>Завдання: <strong>«${escapeHtml(env.ASSIGNMENT_NAME)}»</strong></p>
+        ${aiSummary ? `<div style="background-color: #e8f4f8; padding: 12px; border-left: 4px solid #2980b9; margin: 15px 0;"><strong>Аналітичне резюме:</strong><br/>${escapeHtml(aiSummary)}</div>` : ''}
         <p>Сформовано попередній зведений Google Sheet на основі наявних на цей момент матеріалів:</p>
-        <p><a href="${preliminarySheetUrl}" style="background-color: #2980b9; color: white; padding: 10px 18px; text-decoration: none; border-radius: 4px; display: inline-block;">Відкрити попередній зведений звіт</a></p>
+        <p><a href="${escapeHtml(preliminarySheetUrl)}" style="background-color: #2980b9; color: white; padding: 10px 18px; text-decoration: none; border-radius: 4px; display: inline-block;">Відкрити попередній зведений звіт</a></p>
         <h3 style="color: #c0392b;">Список викладачів, які ще не подали звіт (${missingTeachers.length} осіб):</h3>
         <ol>
-          ${missingTeachers.map((t) => `<li><strong>${t.name}</strong> (${t.email || 'email відсутній'})</li>`).join('')}
+          ${missingTeachers.map((t) => `<li><strong>${escapeHtml(t.name)}</strong> (${escapeHtml(t.email || 'email відсутній')})</li>`).join('')}
         </ol>
-        <p>Усім зазначеним викладачам щойно надіслано попередження про дедлайн (48 годин).</p>
+        <p>Усім зазначеним викладачам щойно надіслано попередження про дедлайн (термін вказано в Google Classroom).</p>
       </div>
     `;
 
@@ -255,22 +259,25 @@ ${summarySection}
   ): Promise<void> {
     const recipients = [env.SCI_DEPT_EMAIL, env.HEAD_OF_DEPT_EMAIL];
 
+    const attachments = jpegAttachments.filter(file => !file.webViewLink);
+    if (attachments.reduce((sum, file) => sum + file.data.length, 0) > 12 * 1024 * 1024) throw new Error('Вкладення перевищують ліміт 12 МБ');
+    const evidenceLinks = [...new Set(jpegAttachments.map(file => file.webViewLink).filter((url): url is string => Boolean(url)))];
     const bodyHtml = `
       <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
         <h2 style="color: #27ae60;">🎓 Фінальний зведений звіт про науково-дослідну роботу кафедри</h2>
         <p>Термін здачі звітів вичерпано. Звіт сформовано та агреговано автоматичною системою кафедри.</p>
-        ${aiSummary ? `<div style="background-color: #eafaf1; padding: 12px; border-left: 4px solid #27ae60; margin: 15px 0;"><strong>Підсумкове резюме:</strong><br/>${aiSummary}</div>` : ''}
+        ${aiSummary ? `<div style="background-color: #eafaf1; padding: 12px; border-left: 4px solid #27ae60; margin: 15px 0;"><strong>Підсумкове резюме:</strong><br/>${escapeHtml(aiSummary)}</div>` : ''}
         <ul>
-          <li><strong>Назва завдання:</strong> «${env.ASSIGNMENT_NAME}»</li>
+          <li><strong>Назва завдання:</strong> «${escapeHtml(env.ASSIGNMENT_NAME)}»</li>
           <li><strong>Подано звітів:</strong> ${totalSubmitted} з ${totalEnrolled} викладачів</li>
           <li><strong>Додано фотоматеріалів (.jpeg):</strong> ${jpegAttachments.length} шт.</li>
         </ul>
         <p>
-          <a href="${finalSheetUrl}" style="background-color: #27ae60; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
+          <a href="${escapeHtml(finalSheetUrl)}" style="background-color: #27ae60; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
             📊 Відкрити підсумковий зведений Google Sheet
           </a>
         </p>
-        <p>Усі додані викладачами фотоматеріали у форматі JPEG прикріплено до цього листа як вкладення.</p>
+        <p>Фотоматеріали в межах ліміту прикріплено до листа. ${evidenceLinks.map(url => `<a href="${escapeHtml(url)}">Решта матеріалів у папці «Підтвердження»</a>`).join(" ")}</p>
         <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
         <p style="font-size: 12px; color: #7f8c8d;">Лист згенеровано автоматично системою кафедри.</p>
       </div>
@@ -280,25 +287,25 @@ ${summarySection}
       to: recipients,
       subject: `[ФІНАЛЬНИЙ ЗВІТ] Зведена інформація про науково-дослідну роботу кафедри`,
       bodyHtml,
-      attachments: jpegAttachments,
+      attachments,
     });
 
     const summarySection = aiSummary
-      ? `\n\n<b>Підсумкове резюме:</b>\n<i>${aiSummary}</i>`
+      ? `\n\n<b>Підсумкове резюме:</b>\n<i>${escapeHtml(aiSummary)}</i>`
       : '';
 
     // Notify Head of Dept on Telegram
     const tgMessage = `
 <b>🚀 Фінальний кафедральний звіт успішно надіслано!</b>
 
-<b>Завдання:</b> ${env.ASSIGNMENT_NAME}
+<b>Завдання:</b> ${escapeHtml(env.ASSIGNMENT_NAME)}
 <b>Подано звітів:</b> ${totalSubmitted} / ${totalEnrolled}
 <b>Додано JPEG фотозвітів:</b> ${jpegAttachments.length}
-<b>Отримувачі:</b> Науковий відділ (${env.SCI_DEPT_EMAIL}) та Завідувач кафедри
+<b>Отримувачі:</b> Науковий відділ (${escapeHtml(env.SCI_DEPT_EMAIL)}) та Завідувач кафедри
 ${summarySection}
 
 <b>Посилання на підсумковий Google Sheet:</b>
-<a href="${finalSheetUrl}">Переглянути фінальний документ</a>
+<a href="${escapeHtml(finalSheetUrl)}">Переглянути фінальний документ</a>
     `.trim();
 
     await this.sendTelegramMessage(tgMessage);

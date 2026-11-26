@@ -276,3 +276,11 @@ async function initialize() {
   finally { $('loading').hidden = true; }
 }
 initialize();
+
+$('connect-telegram').addEventListener('click', async () => {
+  try {
+    const result = await api('/api/telegram/connect', { method: 'POST', body: '{}' });
+    const url = safeLink(result.url, ['t.me']);
+    if (url) { $('telegram-link').href = url; $('telegram-link').hidden = false; }
+  } catch (error) { message(error.message, true); }
+});

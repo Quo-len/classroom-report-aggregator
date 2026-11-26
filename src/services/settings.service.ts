@@ -1,3 +1,4 @@
+import { audit } from './rbac.service';
 import { z } from 'zod';
 import { FastifyInstance } from 'fastify';
 import { withAccount } from './account.service';
@@ -30,6 +31,10 @@ export function registerSettings(server: FastifyInstance) {
     }
     // The account lock prevents two concurrent saves from creating duplicate Drive folders.
     return withAccountLock(userId, () => withAccount(userId, async () => {
+      if (settings.HEAD_OF_DEPT_CHAT_ID) {
+        const binding = await database().query('SELECT chat_id FROM bird.telegram_bindings WHERE user_id = $1', [userId]);
+        if (binding.rows[0]?.chat_id !== settings.HEAD_OF_DEPT_CHAT_ID) return reply.code(400).send({ error: 'Спершу підтвердьте Telegram через посилання підключення.' });
+      }
       const auth = accountContext.getStore()!.auth;
       const course = await WorkspaceService.resolveCourse(auth, settings.COURSE_NAME);
       const { workspace } = await WorkspaceService.load(userId);
@@ -38,6 +43,7 @@ export function registerSettings(server: FastifyInstance) {
       await database().query(`INSERT INTO bird.settings (user_id, value, automation_enabled) VALUES ($1, $2, $3)
         ON CONFLICT (user_id) DO UPDATE SET value = EXCLUDED.value, automation_enabled = EXCLUDED.automation_enabled, updated_at = now()`,
         [userId, settings, automationEnabled]);
+      await audit(userId, userId, 'settings.updated', { automationEnabled });
       return { ok: true, settings, course, workspace: workspaceLinks(provisioned) };
     }, false, false));
   });

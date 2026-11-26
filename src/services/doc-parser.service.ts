@@ -1,4 +1,5 @@
 import AdmZip from 'adm-zip';
+import { mapToOfficialKey, sectionForLabel, SHEETS_SUFFIX } from '../core/metric-mapping';
 
 export interface ParsedDocxResult {
   paragraphs: string[];
@@ -16,6 +17,22 @@ export interface DigestedTeacherEvidence {
 }
 
 export class DocParserService {
+  public static decodeXml(text: string): string {
+    return text.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (entity, name: string) => {
+      const named: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+      if (named[name]) return named[name];
+      const code = name[1].toLowerCase() === 'x' ? parseInt(name.slice(2), 16) : Number(name.slice(1));
+      return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : entity;
+    });
+  }
+
+  private static readXml(zip: AdmZip, name: string): string {
+    const entry = zip.getEntry(name);
+    if (!entry) return '';
+    if (entry.header.size > 10 * 1024 * 1024) throw new Error('XML перевищує ліміт 10 МБ');
+    return entry.getData().toString('utf8');
+  }
+
   /**
    * Helper to convert Excel column letters (e.g. 'A', 'B', 'Z', 'AA') to 0-based index
    */
@@ -36,57 +53,17 @@ export class DocParserService {
    */
   public static parseNumber(val: any): number {
     if (val === null || val === undefined) return 0;
-    if (typeof val === 'number') return isNaN(val) ? 0 : val;
-
-    let str = String(val).trim();
-    if (!str) return 0;
-
-    // Check dashes (hyphen, en-dash, em-dash, minus, horizontal bar)
-    if (str === '-' || str === '–' || str === '—' || str === '−' || str === '―') {
-      return 0;
-    }
-
-    // Normalize homoglyphs for Ukrainian/Russian/English (e.g. English 'i' vs Ukrainian 'і', 'o', 'a', 'e')
-    const normalized = str
-      .toLowerCase()
-      .replace(/[\u0456\u0457\u0406\u0407]/g, 'i') // Cyrillic і, ї -> i
-      .replace(/[\u0430\u0410]/g, 'a')             // Cyrillic а -> a
-      .replace(/[\u043E\u041E]/g, 'o')             // Cyrillic о -> o
-      .replace(/[\u0435\u0415]/g, 'e');            // Cyrillic е -> e
-
-    // Check absence phrases
-    if (
-      normalized.includes('informatsi') || // інформація
-      normalized.includes('vidsutn') ||    // відсутня / відсутнє / відсутні
-      normalized.includes('nemae') ||      // немає
-      normalized.includes('n/d') ||
-      normalized.includes('n/a') ||
-      normalized.includes('none') ||
-      normalized.includes('nil') ||
-      normalized.includes('brak') ||
-      normalized === '0'
-    ) {
-      return 0;
-    }
-
-    // Handle compound format like "3 / 12.5" (count / printed sheets) -> take first number as count
-    const slashMatch = str.match(/^(\d+(?:[.,]\d+)?)\s*\/\s*(\d+(?:[.,]\d+)?)$/);
-    if (slashMatch) {
-      const firstNum = parseFloat(slashMatch[1].replace(/,/g, '.'));
-      return isNaN(firstNum) ? 0 : firstNum;
-    }
-
-    // Clean thousand separators (spaces, non-breaking spaces, narrow NBSP) and convert commas to dots
-    const cleaned = str
-      .replace(/[\s\u00A0\u202F]/g, '')
-      .replace(/,/g, '.');
-
-    if (/^-?\d+(\.\d+)?$/.test(cleaned)) {
-      const parsed = parseFloat(cleaned);
-      return isNaN(parsed) ? 0 : parsed;
-    }
-
-    return 0;
+    if (typeof val === 'number') return Number.isFinite(val) && val >= 0 ? val : 0;
+    const text = String(val).trim();
+    const normalized = text.toLowerCase().replace(/[iaoec]/g, char => ({ i: 'і', a: 'а', o: 'о', e: 'е', c: 'с' }[char]!));
+    if (/відсутн|немає|отсутств|інформація/.test(normalized)) return 0;
+    if (/^[-−]\s*\d/.test(text)) { console.warn('Від’ємний показник відхилено'); return 0; }
+    const count = text.split('/')[0].trim();
+    const withUnit = count.match(/^(\d+(?:[.,]\d+)?)\s*(?:шт\.?|од\.?|статей|публікац\p{L}*)$/iu);
+    const cleaned = (withUnit ? withUnit[1] : count).replace(/[\s\u00a0\u202f]/g, '').replace(',', '.');
+    if (!/^\d+(?:\.\d+)?$/.test(cleaned)) return 0;
+    const number = Number(cleaned);
+    return Number.isFinite(number) ? number : 0;
   }
 
   /**
@@ -134,7 +111,7 @@ export class DocParserService {
         return { paragraphs: [], tables: [], fullText: '' };
       }
 
-      const xml = xmlEntry.getData().toString('utf8');
+      const xml = this.readXml(zip, 'word/document.xml');
 
       // 1. Extract paragraphs
       const paragraphs: string[] = [];
@@ -144,7 +121,7 @@ export class DocParserService {
       while ((pMatch = pRegex.exec(xml)) !== null) {
         const pXml = pMatch[0];
         const tMatches = pXml.match(/<w:t[^>]*>([\s\S]*?)<\/w:t>/g) || [];
-        const text = tMatches.map((t) => t.replace(/<[^>]+>/g, '')).join('').trim();
+        const text = tMatches.map((t) => this.decodeXml(t.replace(/<[^>]+>/g, ''))).join('').trim();
         if (text) {
           paragraphs.push(text);
         }
@@ -152,33 +129,29 @@ export class DocParserService {
 
       // 2. Extract tables
       const tables: string[][][] = [];
-      const tblRegex = /<w:tbl[\s\S]*?<\/w:tbl>/g;
-      let tblMatch: RegExpExecArray | null;
-
-      while ((tblMatch = tblRegex.exec(xml)) !== null) {
-        const tblXml = tblMatch[0];
-        const rows: string[][] = [];
-        const trRegex = /<w:tr[\s\S]*?<\/w:tr>/g;
-        let trMatch: RegExpExecArray | null;
-
-        while ((trMatch = trRegex.exec(tblXml)) !== null) {
-          const trXml = trMatch[0];
-          const cells: string[] = [];
-          const tcRegex = /<w:tc[\s\S]*?<\/w:tc>/g;
-          let tcMatch: RegExpExecArray | null;
-
-          while ((tcMatch = tcRegex.exec(trXml)) !== null) {
-            const tcXml = tcMatch[0];
-            const tMatches = tcXml.match(/<w:t[^>]*>([\s\S]*?)<\/w:t>/g) || [];
-            const cellText = tMatches.map((t) => t.replace(/<[^>]+>/g, '')).join(' ').trim();
-            cells.push(cellText);
-          }
-          if (cells.some((c) => c !== '')) {
-            rows.push(cells);
-          }
+      const stack: { rows: string[][]; row: string[]; cell: string; inCell: boolean }[] = [];
+      const tokens = /<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>|<(\/?)w:(tbl|tr|tc|p)\b[^>]*>/g;
+      let token: RegExpExecArray | null;
+      while ((token = tokens.exec(xml)) !== null) {
+        const current = stack[stack.length - 1];
+        if (token[1] !== undefined) {
+          if (current?.inCell) current.cell += this.decodeXml(token[1]);
+          continue;
         }
-        if (rows.length > 0) {
-          tables.push(rows);
+        const closing = token[2] === '/';
+        const tag = token[3];
+        if (tag === 'tbl') {
+          if (!closing) stack.push({ rows: [], row: [], cell: '', inCell: false });
+          else {
+            const table = stack.pop();
+            if (table?.rows.length) tables.push(table.rows);
+          }
+        } else if (current) {
+          if (tag === 'tr' && !closing) current.row = [];
+          if (tag === 'tc' && !closing) { current.cell = ''; current.inCell = true; }
+          if (tag === 'p' && closing && current.inCell) current.cell += ' ';
+          if (tag === 'tc' && closing) { current.row.push(current.cell.trim()); current.inCell = false; }
+          if (tag === 'tr' && closing && current.row.some(Boolean)) current.rows.push(current.row);
         }
       }
 
@@ -205,21 +178,28 @@ export class DocParserService {
       const sharedStrings: string[] = [];
       const ssEntry = zip.getEntry('xl/sharedStrings.xml');
       if (ssEntry) {
-        const ssXml = ssEntry.getData().toString('utf8');
+        const ssXml = this.readXml(zip, 'xl/sharedStrings.xml');
         const siRegex = /<si[\s\S]*?<\/si>/g;
         let m: RegExpExecArray | null;
         while ((m = siRegex.exec(ssXml)) !== null) {
           const tMatches = m[0].match(/<t[^>]*>([\s\S]*?)<\/t>/g) || [];
-          const text = tMatches.map((t) => t.replace(/<[^>]+>/g, '')).join('');
+          const text = tMatches.map((t) => this.decodeXml(t.replace(/<[^>]+>/g, ''))).join('');
           sharedStrings.push(text);
         }
       }
 
       // 2. Worksheet 1
-      const sheetEntry = zip.getEntry('xl/worksheets/sheet1.xml');
+      const workbook = this.readXml(zip, 'xl/workbook.xml');
+      const firstId = workbook.match(/<sheet\b[^>]*r:id="([^"]+)"/)?.[1];
+      const relations = this.readXml(zip, 'xl/_rels/workbook.xml.rels');
+      const relation = (relations.match(/<Relationship\b[^>]*\/>/g) || []).find(tag => tag.includes(`Id="${firstId}"`));
+      const target = relation?.match(/Target="([^"]+)"/)?.[1];
+      const sheetPath = target ? (target.startsWith('/') ? target.slice(1) : `xl/${target}`) : 'xl/worksheets/sheet1.xml';
+      if (sheetPath.includes('..')) throw new Error('Неприпустимий шлях аркуша');
+      const sheetEntry = zip.getEntry(sheetPath);
       if (!sheetEntry) return [];
 
-      const sheetXml = sheetEntry.getData().toString('utf8');
+      const sheetXml = this.readXml(zip, sheetPath);
       const grid: string[][] = [];
 
       const rowRegex = /<row[\s\S]*?<\/row>/g;
@@ -228,7 +208,7 @@ export class DocParserService {
       while ((rowMatch = rowRegex.exec(sheetXml)) !== null) {
         const rowXml = rowMatch[0];
         const rowCells: string[] = [];
-        const cRegex = /<c[\s\S]*?<\/c>/g;
+        const cRegex = /<c\b[^>]*?(?:\/>|>[\s\S]*?<\/c>)/g;
         let cMatch: RegExpExecArray | null;
 
         while ((cMatch = cRegex.exec(rowXml)) !== null) {
@@ -243,7 +223,7 @@ export class DocParserService {
 
           if (isInline) {
             const isMatch = cXml.match(/<is>[\s\S]*?<t[^>]*>([\s\S]*?)<\/t>[\s\S]*?<\/is>/);
-            val = isMatch ? isMatch[1] : '';
+            val = isMatch ? this.decodeXml(isMatch[1]) : '';
           } else {
             const vMatch = cXml.match(/<v>([\s\S]*?)<\/v>/);
             val = vMatch ? vMatch[1].trim() : '';
@@ -260,9 +240,10 @@ export class DocParserService {
           rowCells[colIdx] = val;
         }
 
-        if (rowCells.some((c) => c !== '')) {
-          grid.push(rowCells);
-        }
+        const rowNumber = Number(rowXml.match(/^<row\b[^>]*\br="(\d+)"/)?.[1] || grid.length + 1);
+        if (rowNumber > 10000) throw new Error('Завелика кількість рядків');
+        while (grid.length < rowNumber) grid.push([]);
+        grid[rowNumber - 1] = rowCells;
       }
 
       return grid;
@@ -281,7 +262,7 @@ export class DocParserService {
     const lowerName = filename.toLowerCase();
 
     // Specialize for Додаток 1 (Staff Roster)
-    if (lowerName.includes('додаток_1.') || lowerName.includes('додаток 1.') || parsed.fullText.includes('Список професорсько-викладацького складу')) {
+    if (!/монограф/i.test(lowerName) && parsed.fullText.includes('Список професорсько-викладацького складу')) {
       let totalStaff = 0;
       let fullTime = 0;
       let doctors = 0;
@@ -303,7 +284,7 @@ export class DocParserService {
       }
 
       // Also check paragraphs (e.g. numbered list of teachers)
-      for (const p of parsed.paragraphs) {
+      for (const p of parsed.paragraphs.filter(p => !parsed.tables.some(table => table.some(row => row.some(cell => cell.includes(p)))))) {
         if (/^\d+[\.\)]\s+([А-ЯІЇЄ][а-яіїє\']+\s+[А-ЯІЇЄ]\.?\s*[А-ЯІЇЄ]\.?|[А-ЯІЇЄ][а-яіїє\']+\s+[А-ЯІЇЄ][а-яіїє\']+\s+[А-ЯІЇЄ][а-яіїє\']+)/.test(p)) {
           totalStaff++;
           const pLower = p.toLowerCase();
@@ -321,7 +302,7 @@ export class DocParserService {
     }
 
     // Specialize for Додаток 3 (Publications list)
-    if (lowerName.includes('додаток_3') || lowerName.includes('додаток 3') || parsed.fullText.includes('Список опублікованих монографій')) {
+    if (/додаток[_ ](?:3|1)(?!\d)/i.test(lowerName) || parsed.fullText.includes('Список опублікованих монографій')) {
       let monographs = 0;
       let textbooks = 0;
       let manuals = 0;
@@ -330,6 +311,11 @@ export class DocParserService {
       let fakhoviArticles = 0;
       let theses = 0;
       let printedSheets = 0;
+      const publicationSheets = new Map<string, number>();
+      const addSheets = (label: string, sheets: number) => {
+        const key = mapToOfficialKey(label, 3);
+        if (key) publicationSheets.set(key + SHEETS_SUFFIX, (publicationSheets.get(key + SHEETS_SUFFIX) || 0) + sheets);
+      };
 
       // 1. Parse tables
       for (const tbl of parsed.tables) {
@@ -339,6 +325,7 @@ export class DocParserService {
           if (!row[1] && !row[2]) continue;
 
           const rowText = row.join(' ').toLowerCase();
+          if (row.slice(1).every(cell => !cell.trim() || /^(?:[-–—]|інформація відсутня|немає)$/i.test(cell.trim()))) continue;
 
           if (rowText.includes('монограф')) monographs++;
           else if (rowText.includes('підручник')) textbooks++;
@@ -351,14 +338,19 @@ export class DocParserService {
 
           const lastCell = row[row.length - 1];
           const sheetNum = this.parseNumber(lastCell);
-          if (sheetNum > 0) printedSheets += sheetNum;
+          if (sheetNum > 0) {
+            printedSheets += sheetNum;
+            addSheets(rowText.includes('монограф') ? 'монографії' : rowText.includes('підручник') ? 'підручники' : rowText.includes('посібник') ? 'посібники' : rowText.includes('тези') ? 'тези доповідей' : 'статті із них у фахових виданнях', sheetNum);
+            if (rowText.includes('scopus')) addSheets('статті в журналах Scopus', sheetNum);
+            if (rowText.includes('wos') || rowText.includes('web of science')) addSheets('статті в журналах Web of Science', sheetNum);
+          }
         }
       }
 
       // 2. Also parse numbered publication paragraphs (e.g., "1. Author ... // Journal ...")
-      for (const p of parsed.paragraphs) {
+      for (const p of parsed.paragraphs.filter(p => !parsed.tables.some(table => table.some(row => row.some(cell => cell.includes(p)))))) {
         const trimmed = p.trim();
-        if (/^\d+[\.\)]\s+/.test(trimmed) && (trimmed.includes('//') || trimmed.includes('№') || trimmed.includes('Vol.') || trimmed.includes('С.') || trimmed.includes('P.'))) {
+        if (/^\d+[\.\)]\s+/.test(trimmed) && (trimmed.includes('//') || trimmed.includes('№') || trimmed.includes('Vol.') || trimmed.includes('С.') || trimmed.includes('P.') || /монограф/i.test(trimmed))) {
           const pLower = trimmed.toLowerCase();
           if (pLower.includes('монограф')) monographs++;
           else if (pLower.includes('підручник')) textbooks++;
@@ -371,7 +363,11 @@ export class DocParserService {
 
           const sheetMatch = trimmed.match(/(\d+(?:[.,]\d+)?)\s*др\.?\s*арк/i);
           if (sheetMatch) {
-            printedSheets += this.parseNumber(sheetMatch[1]);
+            const sheets = this.parseNumber(sheetMatch[1]);
+            printedSheets += sheets;
+            addSheets(pLower.includes('монограф') ? 'монографії' : pLower.includes('підручник') ? 'підручники' : pLower.includes('посібник') ? 'посібники' : pLower.includes('тези') || pLower.includes('конференц') ? 'тези доповідей' : 'статті із них у фахових виданнях', sheets);
+            if (pLower.includes('scopus')) addSheets('статті в журналах Scopus', sheets);
+            if (pLower.includes('wos') || pLower.includes('web of science')) addSheets('статті в журналах Web of Science', sheets);
           }
         }
       }
@@ -383,23 +379,29 @@ export class DocParserService {
       if (wosArticles > 0) metrics.set('Розділ 3. Публікації (к-сть публікацій / к-сть др. аркушів) — статті в журналах Web of Science', wosArticles);
       if (fakhoviArticles > 0) metrics.set('Розділ 3. Публікації (к-сть публікацій / к-сть др. аркушів) — статті із них у фахових виданнях', fakhoviArticles);
       if (theses > 0) metrics.set('Розділ 3. Публікації (к-сть публікацій / к-сть др. аркушів) — тези доповідей', theses);
-      if (printedSheets > 0) metrics.set('Розділ 3. Публікації — др. аркуші (всього)', printedSheets);
+      const totalKey = 'Розділ 3. Публікації (к-сть публікацій / к-сть др. аркушів) — всього:';
+      metrics.set(totalKey, monographs + textbooks + manuals + fakhoviArticles + theses);
+      metrics.set(totalKey + SHEETS_SUFFIX, printedSheets);
+      const articlesKey = 'Розділ 3. Публікації (к-сть публікацій / к-сть др. аркушів) — статті в журналах: всього';
+      metrics.set(articlesKey, fakhoviArticles);
+      metrics.set(articlesKey + SHEETS_SUFFIX, publicationSheets.get(mapToOfficialKey('статті із них у фахових виданнях', 3)! + SHEETS_SUFFIX) || 0);
+      for (const [key, value] of publicationSheets) metrics.set(key, value);
 
       return metrics;
     }
 
     // Specialize for Додаток 10 (Patents and licenses)
-    if (lowerName.includes('додаток_10') || lowerName.includes('додаток 10') || parsed.fullText.includes('авторські свідоцтва, патенти') || parsed.fullText.includes('патент на корисну модель')) {
+    if (lowerName.includes('додаток_10') || lowerName.includes('додаток 10')) {
       let count = 0;
       for (const tbl of parsed.tables) {
         for (let r = 1; r < tbl.length; r++) {
           const row = tbl[r];
           const rowText = row.join(' ').toLowerCase();
-          if (this.parseNumber(rowText) === 0 && (rowText.includes('відсутн') || rowText.includes('немає') || rowText.includes('-'))) continue;
+          if (row.filter((cell, index) => cell.trim() && !(index === 0 && /^\d+$/.test(cell.trim()))).every(cell => /^(?:[-–—]|інформація відсутня|відсутн[яіє]|немає)$/i.test(cell.trim()))) continue;
           if (row.some((c) => c.trim().length > 2)) count++;
         }
       }
-      for (const p of parsed.paragraphs) {
+      for (const p of parsed.paragraphs.filter(p => !parsed.tables.some(table => table.some(row => row.some(cell => cell.includes(p)))))) {
         const trimmed = p.trim();
         if (/^\d+[\.\)]\s+.*(патент|корисну модель|авторськ)/i.test(trimmed)) {
           count++;
@@ -412,7 +414,7 @@ export class DocParserService {
     }
 
     // Specialize for Додаток 18 (Grants and international projects)
-    if (lowerName.includes('додаток_18') || lowerName.includes('додаток 18') || parsed.fullText.includes('Гранти, отримані від міжнародних фондів')) {
+    if (lowerName.includes('додаток_18') || lowerName.includes('додаток 18')) {
       let count = 0;
       for (const tbl of parsed.tables) {
         for (let r = 1; r < tbl.length; r++) {
@@ -425,7 +427,7 @@ export class DocParserService {
           if (row.some((c) => c.trim().length > 3 && !/^\d+$/.test(c.trim()))) count++;
         }
       }
-      for (const p of parsed.paragraphs) {
+      for (const p of parsed.paragraphs.filter(p => !parsed.tables.some(table => table.some(row => row.some(cell => cell.includes(p)))))) {
         const trimmed = p.trim();
         if (/^\d+[\.\)]\s+.*(грант|horizon|європа|проєкт|фонд)/i.test(trimmed)) {
           count++;
@@ -437,32 +439,33 @@ export class DocParserService {
       return metrics;
     }
 
-    // Generic table parsing: Indicator Name in col 0, value in col 1+
-    for (const tbl of parsed.tables) {
-      for (const row of tbl) {
-        if (!row || row.length < 2) continue;
-        const indName = row[0].trim();
-        if (this.isNonIndicatorOrGarbage(indName)) continue;
-
-        for (let c = 1; c < row.length; c++) {
-          const val = row[c];
-          if (val !== undefined && val !== null && val.trim() !== '') {
-            const num = this.parseNumber(val);
-            const current = metrics.get(indName) || 0;
-            metrics.set(indName, current + num);
-            break;
-          }
-        }
+    let section: number | undefined;
+    for (const table of parsed.tables) {
+      for (const row of table) {
+        if (!row.length) continue;
+        const numbered = /^\d+$/.test(row[0].trim());
+        const name = String(row[numbered ? 1 : 0] || '').trim();
+        const detectedSection = sectionForLabel(name);
+        if (detectedSection) { section = detectedSection; continue; }
+        if (this.isNonIndicatorOrGarbage(name)) continue;
+        const key = mapToOfficialKey(name, section) || name;
+        const raw = row[numbered ? 2 : 1];
+        const value = this.parseNumber(raw);
+        if (value) metrics.set(key, (metrics.get(key) || 0) + value);
+        if (raw?.includes('/')) metrics.set(key + SHEETS_SUFFIX, this.parseNumber(raw.split('/')[1]));
       }
     }
 
     // Generic paragraph text parsing: "Показник: 5" or "Scopus - 2"
-    for (const line of parsed.paragraphs) {
+    section = undefined;
+    for (const line of parsed.paragraphs.filter(line => !parsed.tables.some(table => table.some(row => row.includes(line))))) {
+      const detectedSection = sectionForLabel(line);
+      if (detectedSection) { section = detectedSection; continue; }
       if (this.isNonIndicatorOrGarbage(line)) continue;
 
-      const match = line.match(/^([^:\-\t–]+)[:\t–\-]\s*(.+)$/);
+      const match = line.match(/^(.+)(?::|\t|\s[–—-]\s)\s*(.+)$/);
       if (match) {
-        const ind = match[1].trim();
+        const ind = mapToOfficialKey(match[1].trim(), section) || match[1].trim();
         if (this.isNonIndicatorOrGarbage(ind)) continue;
 
         const raw = match[2].trim();
@@ -470,6 +473,7 @@ export class DocParserService {
         if (num > 0) {
           const current = metrics.get(ind) || 0;
           metrics.set(ind, current + num);
+          if (raw.includes('/')) metrics.set(ind + SHEETS_SUFFIX, this.parseNumber(raw.split('/')[1]));
         }
       }
     }

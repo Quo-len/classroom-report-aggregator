@@ -1,3 +1,4 @@
+import { localRun } from '../core/local-state';
 import { apiError } from './api-error';
 import { accountContext } from '../core/account-context';
 import { database } from './database.service';
@@ -29,7 +30,7 @@ export class SheetsService {
       return response.data.values || [];
     } catch (error) {
       console.error(`⚠️ Failed to read sheet [${spreadsheetId}]:`, apiError(error));
-      return [];
+      throw error;
     }
   }
 
@@ -59,7 +60,7 @@ export class SheetsService {
     existingSpreadsheetId?: string
   ): Promise<{ spreadsheetId: string; webViewLink: string }> {
     const sheets = await this.getClient();
-    let spreadsheetId = existingSpreadsheetId;
+    let spreadsheetId = existingSpreadsheetId || localRun.getStore()?.state.spreadsheetId;
     const context = accountContext.getStore();
     if (context?.assignmentId && !context.dryRun) {
       const existing = await database().query('SELECT spreadsheet_id FROM bird.reports WHERE user_id = $1 AND course_id = $2 AND assignment_id = $3',
@@ -118,6 +119,8 @@ export class SheetsService {
         throw new Error('Failed to create Master Google Sheet: empty spreadsheet ID returned.');
       }
 
+      const local = localRun.getStore();
+      if (local) { local.state.spreadsheetId = spreadsheetId; local.save(); }
       if (context?.assignmentId && !context.dryRun) {
         await database().query(`INSERT INTO bird.reports (user_id, course_id, assignment_id, spreadsheet_id) VALUES ($1, $2, $3, $4)
           ON CONFLICT (user_id, course_id, assignment_id) DO UPDATE SET spreadsheet_id = EXCLUDED.spreadsheet_id`,
@@ -166,7 +169,7 @@ export class SheetsService {
         detailSheetId = addSheetRes.data.replies?.[0]?.addSheet?.properties?.sheetId || 1;
       }
 
-      const resize: sheets_v4.Schema$Request[] = [{ updateSheetProperties: {
+      const resize: sheets_v4.Schema$Request[] = [{ updateSpreadsheetProperties: { properties: { title }, fields: 'title' } }, { updateSheetProperties: {
         properties: { sheetId: summarySheetId, gridProperties: { rowCount: Math.max(summaryGrid.length + 5, 135) } },
         fields: 'gridProperties.rowCount',
       } }, { unmergeCells: { range: { sheetId: summarySheetId } } }];
@@ -205,7 +208,7 @@ export class SheetsService {
     await sheets.spreadsheets.values.update({
       spreadsheetId,
       range: `'${summarySheetTitle}'!A1`,
-      valueInputOption: 'USER_ENTERED',
+      valueInputOption: 'RAW',
       requestBody: {
         values: summaryGrid,
       },
@@ -217,7 +220,7 @@ export class SheetsService {
       await sheets.spreadsheets.values.update({
         spreadsheetId,
         range: `'${detailSheetTitle}'!A1`,
-        valueInputOption: 'USER_ENTERED',
+        valueInputOption: 'RAW',
         requestBody: {
           values: detailGrid,
         },

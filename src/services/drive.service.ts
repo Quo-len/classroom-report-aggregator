@@ -11,6 +11,7 @@ export interface DriveFileInfo {
   name: string;
   mimeType: string;
   webViewLink?: string;
+  size?: number;
 }
 
 export interface DownloadedAsset {
@@ -19,6 +20,7 @@ export interface DownloadedAsset {
   data: Buffer;
   driveFileId: string;
   authorName?: string;
+  webViewLink?: string;
 }
 
 export class DriveService {
@@ -95,7 +97,7 @@ export class DriveService {
       return results;
     } catch (error) {
       console.error(`❌ Failed to list files in Google Drive folder [${folderId}]:`, apiError(error));
-      return results;
+      throw error;
     }
   }
 
@@ -107,7 +109,7 @@ export class DriveService {
     try {
       const res = await drive.files.get({
         fileId,
-        fields: 'id, name, mimeType, webViewLink',
+        fields: 'id, name, mimeType, webViewLink, size',
         supportsAllDrives: true,
       });
 
@@ -116,6 +118,7 @@ export class DriveService {
         name: res.data.name || 'unnamed_file',
         mimeType: res.data.mimeType || 'application/octet-stream',
         webViewLink: res.data.webViewLink || undefined,
+        size: res.data.size ? Number(res.data.size) : undefined,
       };
     } catch (error) {
       console.error(`⚠️ Failed to fetch metadata for file ID [${fileId}]:`, apiError(error));
@@ -136,7 +139,7 @@ export class DriveService {
           alt: 'media',
           supportsAllDrives: true,
         },
-        { responseType: 'arraybuffer' }
+        { responseType: 'arraybuffer', maxContentLength: 50 * 1024 * 1024 }
       );
 
       const buffer = Buffer.from(res.data as ArrayBuffer);
@@ -155,7 +158,7 @@ export class DriveService {
       console.log(`Exporting Google Doc [${fileId}] as DOCX...`);
       const res = await drive.files.export(
         { fileId, mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
-        { responseType: 'arraybuffer' }
+        { responseType: 'arraybuffer', maxContentLength: 50 * 1024 * 1024 }
       );
       return Buffer.from(res.data as ArrayBuffer);
     } catch (error) {
@@ -223,57 +226,47 @@ export class DriveService {
     submissions: { attachments: { id?: string; title?: string; alternateLink?: string; mimeType?: string }[]; studentName: string }[]
   ): Promise<DownloadedAsset[]> {
     const jpegs: DownloadedAsset[] = [];
-
-    for (const sub of submissions) {
-      for (const att of sub.attachments) {
-        if (!att.id) continue;
-
-        try {
-          const meta = await this.getFileMetadata(att.id);
-          const mimeType = meta?.mimeType || att.mimeType || '';
-          const title = meta?.name || att.title || '';
-
-          // 1. Direct JPEG
-          if (/\.(jpe?g)$/i.test(title) || mimeType.includes('image/jpeg')) {
-            const safeFilename = `${sub.studentName.replace(/[\/\\?%*:|"<>]/g, '_')}_${title || 'photo.jpg'}`;
-            const buffer = await this.downloadFileBuffer(att.id, safeFilename);
-            if (buffer) {
-              jpegs.push({
-                filename: safeFilename,
-                mimeType: 'image/jpeg',
-                data: buffer,
-                driveFileId: att.id,
-                authorName: sub.studentName,
-              });
-            }
-          }
-          // 2. Google Drive Folder
-          else if (mimeType === 'application/vnd.google-apps.folder' || att.alternateLink?.includes('folders/')) {
-            console.log(`📂 Scanning folder [${title}] for JPEG attachments (${sub.studentName})...`);
-            const folderFiles = await this.listFilesInFolder(att.id, true);
-            for (const f of folderFiles) {
-              if (/\.(jpe?g)$/i.test(f.name) || (f.mimeType && f.mimeType.includes('image/jpeg'))) {
-                const safeFilename = `${sub.studentName.replace(/[\/\\?%*:|"<>]/g, '_')}_${f.name}`;
-                const buffer = await this.downloadFileBuffer(f.id, safeFilename);
-                if (buffer) {
-                  jpegs.push({
-                    filename: safeFilename,
-                    mimeType: 'image/jpeg',
-                    data: buffer,
-                    driveFileId: f.id,
-                    authorName: sub.studentName,
-                  });
-                }
-              }
-            }
-          }
-        } catch (err) {
-          console.error(`⚠️ Failed to collect JPEG attachments from [${att.title}] for ${sub.studentName}:`, apiError(err));
+    const seen = new Set<string>();
+    let totalBytes = 0;
+    let attachedCount = 0;
+    let evidenceFolder: string | undefined;
+    const collect = async (file: DriveFileInfo, author: string) => {
+      if (seen.has(file.id)) return;
+      seen.add(file.id);
+      if (!/\.jpe?g$/i.test(file.name) && file.mimeType !== 'image/jpeg') return;
+      const meta = file.size === undefined ? await this.getFileMetadata(file.id) : file;
+      const filename = `${author}_${file.name}`.replace(/[\/\\?%*:|"<>]/g, '_');
+      // Leave room for MIME and both base64 encodings; never fetch overflow photos into memory.
+      if (meta?.size !== undefined && meta.size <= 5 * 1024 * 1024 && totalBytes + meta.size <= 12 * 1024 * 1024 && attachedCount < 20) {
+        const data = await this.downloadFileBuffer(file.id, filename);
+        if (data && totalBytes + data.length <= 12 * 1024 * 1024) {
+          totalBytes += data.length;
+          attachedCount++;
+          jpegs.push({ filename, mimeType: 'image/jpeg', data, driveFileId: file.id, authorName: author });
+          return;
         }
       }
+      const drive = await this.getClient();
+      if (!evidenceFolder) {
+        const folder = await drive.files.create({ requestBody: { name: 'Підтвердження', mimeType: 'application/vnd.google-apps.folder', parents: [env.MASTER_OUTPUT_FOLDER_ID] }, fields: 'id' });
+        evidenceFolder = folder.data.id || undefined;
+        if (!evidenceFolder) throw new Error('Не вдалося створити папку підтверджень');
+      }
+      const copy = await drive.files.copy({ fileId: file.id, requestBody: { name: filename, parents: [evidenceFolder] }, fields: 'id,webViewLink', supportsAllDrives: true });
+      if (!copy.data.id) throw new Error('Не вдалося скопіювати підтвердження');
+      jpegs.push({ filename, mimeType: 'image/jpeg', data: Buffer.alloc(0), driveFileId: copy.data.id,
+        webViewLink: `https://drive.google.com/drive/folders/${evidenceFolder}`, authorName: author });
+    };
+    for (const sub of submissions) {
+      for (const attachment of sub.attachments) {
+        if (!attachment.id) continue;
+        const meta = await this.getFileMetadata(attachment.id);
+        if (!meta) throw new Error(`Не вдалося прочитати вкладення: ${attachment.title}`);
+        if (meta.mimeType === 'application/vnd.google-apps.folder') {
+          for (const file of await this.listFilesInFolder(meta.id, true)) await collect(file, sub.studentName);
+        } else await collect(meta, sub.studentName);
+      }
     }
-
-    console.log(`🖼️ Total JPEG attachments collected: ${jpegs.length}`);
     return jpegs;
   }
 }

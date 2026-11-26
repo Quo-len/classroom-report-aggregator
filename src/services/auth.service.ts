@@ -87,7 +87,7 @@ export class AuthService {
         }
         const updatedTokens = { ...existingTokens, ...tokens };
         fs.mkdirSync(path.dirname(this.tokenPath), { recursive: true });
-        fs.writeFileSync(this.tokenPath, JSON.stringify(updatedTokens, null, 2), 'utf8');
+        fs.writeFileSync(this.tokenPath, JSON.stringify(updatedTokens, null, 2), { encoding: 'utf8', mode: 0o600 });
         console.log('🔄 Google OAuth2 tokens automatically refreshed and saved to token.json');
       } catch (err) {
         console.error('⚠️ Failed to save refreshed OAuth tokens:', err);
@@ -181,7 +181,7 @@ export class AuthService {
   private static openBrowser(url: string): void {
     const command = process.platform === 'win32' ? 'powershell.exe' : process.platform === 'darwin' ? 'open' : 'xdg-open';
     const args = process.platform === 'win32'
-      ? ['-NoProfile', '-NonInteractive', '-Command', 'Start-Process -FilePath $env.BIRD_OAUTH_URL']
+      ? ['-NoProfile', '-NonInteractive', '-Command', 'Start-Process -FilePath $env:BIRD_OAUTH_URL']
       : [url];
     const child = spawn(command, args, {
       windowsHide: true, stdio: 'ignore',

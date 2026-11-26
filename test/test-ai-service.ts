@@ -1,5 +1,7 @@
 import { AIService } from '../src/services/ai.service';
 
+Object.assign(process.env, { TELEGRAM_BOT_TOKEN: 'test', HEAD_OF_DEPT_CHAT_ID: '1', HEAD_OF_DEPT_EMAIL: 'head@example.com', SCI_DEPT_EMAIL: 'science@example.com', GROQ_API_KEY: '' });
+
 console.log('🧪 Running Groq AI Service Test Suite...\n');
 
 let totalTests = 0;

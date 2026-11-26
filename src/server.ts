@@ -1,3 +1,4 @@
+import { registerTelegramBinding } from './services/telegram-binding.service';
 import path from 'path';
 import Fastify, { FastifyInstance, LogController } from 'fastify';
 import fastifyStatic from '@fastify/static';
@@ -26,6 +27,7 @@ export async function createServer(): Promise<FastifyInstance> {
   const config = getWebEnv();
   const server = Fastify({ logger: true, logController: new LogController({ disableRequestLogging: true }), bodyLimit: 32768 });
   server.decorateRequest('accountSession', null);
+  const limits = new Map<string, { count: number; expires: number }>();
   server.addHook('onRequest', async (request, reply) => {
     reply.header('X-Content-Type-Options', 'nosniff');
     reply.header('Referrer-Policy', 'no-referrer');
@@ -33,6 +35,15 @@ export async function createServer(): Promise<FastifyInstance> {
     reply.header('Cache-Control', 'no-store');
     reply.header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     const url = request.routeOptions.url || request.url.split('?')[0];
+    if (url === '/auth/login' || url.startsWith('/api/trigger/') || url === '/api/telegram/connect') {
+      const now = Date.now();
+      for (const [key, value] of limits) if (value.expires <= now) limits.delete(key);
+      const key = `${request.ip}:${url === '/auth/login' ? 'login' : 'trigger'}`;
+      const limit = limits.get(key) || { count: 0, expires: now + 60000 };
+      if (limit.count >= 10 || (!limits.has(key) && limits.size >= 10000)) return reply.code(429).header('Retry-After', '60').send({ error: 'Забагато запитів. Спробуйте за хвилину.' });
+      limit.count++;
+      limits.set(key, limit);
+    }
     if (!url.startsWith('/api/')) return;
     request.accountSession = await getSession(request);
     if (url === '/api/me' && request.method === 'GET') return;
@@ -57,6 +68,7 @@ export async function createServer(): Promise<FastifyInstance> {
   server.register(fastifyStatic, { root: path.resolve('public'), prefix: '/' });
   registerAuth(server);
   registerSettings(server);
+  registerTelegramBinding(server);
   registerAdmin(server);
   server.get('/health', async () => ({ ok: true }));
   server.get('/api/me', async request => {
