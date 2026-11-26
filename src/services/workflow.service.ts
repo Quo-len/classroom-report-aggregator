@@ -29,7 +29,7 @@ export async function executeWorkflow(userId: string, requested: Phase, dryRun =
     const previous = await database().query(`SELECT id, status, sheet_url FROM bird.runs
       WHERE user_id = $1 AND course_id = $2 AND assignment_id = $3 AND phase = $4 ORDER BY started_at DESC, id DESC LIMIT 1`, [userId, courseId, assignment.id, phase]);
     const last = previous.rows[0];
-    if (last?.status === 'completed' && (requested === 'auto' || phase !== 'reconcile')) {
+    if (last?.status === 'completed' && requested === 'auto') {
       return { ok: true, sheetUrl: last.sheet_url, message: 'Цей етап уже виконано. Повторні сповіщення не надсилалися.' };
     }
     if (last) {
