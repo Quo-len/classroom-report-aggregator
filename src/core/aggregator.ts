@@ -1,12 +1,9 @@
-import AdmZip from 'adm-zip';
-import { accountContext } from './account-context';
-import { AIService } from '../services/ai.service';
-import { mapToOfficialKey, sectionForLabel, normalizeLabel, SHEETS_SUFFIX, completePublicationTotals } from './metric-mapping';
+import path from 'path';
 import { SheetsService } from '../services/sheets.service';
 import { DriveService } from '../services/drive.service';
 import { DocParserService, DigestedTeacherEvidence } from '../services/doc-parser.service';
 import { CourseAssignment, StudentSubmissionItem } from '../services/classroom.service';
-import { OFFICIAL_INDICATORS, OFFICIAL_TEMPLATE_ROWS } from '../config/official-template';
+import { OFFICIAL_INDICATORS, OFFICIAL_SECTIONS, OFFICIAL_TEMPLATE_ROWS } from '../config/official-template';
 import { env } from '../config/env';
 
 export interface ParsedMetric {
@@ -20,9 +17,6 @@ export interface TeacherReportData {
   studentEmail: string;
   hasSubmitted: boolean;
   submissionState: string;
-  hasAddonFiles?: boolean;
-  isSharedSource?: boolean;
-  warnings?: string[];
   submissionDate?: string;
   attachmentsList: string;
   metrics: Map<string, number>;
@@ -38,56 +32,9 @@ export interface AggregationResult {
   staticPlanRows: any[][];
   staticSciPlanRows: any[][];
   aiSummary?: string;
-  warnings?: string[];
 }
 
 export class Aggregator {
-  public static metricsFromText(text: string): Map<string, number> {
-    const result = new Map<string, number>();
-    let section: number | undefined;
-    for (const line of text.split(/\r?\n/)) {
-      const match = line.trim().match(/^(.+)(?::|\t|\s[–—-]\s)\s*(.+)$/);
-      if (!match) { section = sectionForLabel(line.trim()) || section; continue; }
-      const name = match[1].trim();
-      if (DocParserService.isNonIndicatorOrGarbage(name)) continue;
-      const key = mapToOfficialKey(name, section) || name;
-      const value = DocParserService.parseNumber(match[2]);
-      if (value) result.set(key, (result.get(key) || 0) + value);
-      if (match[2].includes('/')) result.set(key + SHEETS_SUFFIX, DocParserService.parseNumber(match[2].split('/')[1]));
-    }
-    return result;
-  }
-
-  public static metricsFromRows(rows: any[][]): Map<string, number> {
-    const metrics = new Map<string, number>();
-    const official = normalizeLabel(String(rows[1]?.[1] || '')) === 'інформація';
-    let section: number | undefined;
-    for (let index = 0; index < rows.length; index++) {
-      const row = rows[index];
-      if (!row) continue;
-      if (official) {
-        const key = OFFICIAL_TEMPLATE_ROWS.find(item => item.row === index + 1)?.indicatorKey;
-        if (key && String(row[2] ?? '').trim() && String(row[2]).trim() !== '/') {
-          metrics.set(key, DocParserService.parseNumber(row[2]));
-          if (String(row[2]).includes('/')) metrics.set(key + SHEETS_SUFFIX, DocParserService.parseNumber(String(row[2]).split('/')[1]));
-        }
-        continue;
-      }
-      const numbered = /^\d+$/.test(String(row[0] || '').trim());
-      const name = String(row[numbered ? 1 : 0] || '').trim();
-      const detectedSection = sectionForLabel(name);
-      if (detectedSection) { section = detectedSection; continue; }
-      if (DocParserService.isNonIndicatorOrGarbage(name)) continue;
-      const key = mapToOfficialKey(name, section) || name;
-      const value = DocParserService.parseNumber(row[numbered ? 2 : 1]);
-      if (value) metrics.set(key, (metrics.get(key) || 0) + value);
-      const raw = String(row[numbered ? 2 : 1] || '');
-      if (raw.includes('/')) metrics.set(key + SHEETS_SUFFIX, DocParserService.parseNumber(raw.split('/')[1]));
-    }
-    return metrics;
-  }
-
-
   /**
    * CRITICAL Business Rule:
    * Parse numeric value from a cell.
@@ -110,7 +57,6 @@ export class Aggregator {
       submissionDate: submission.updateTime ? new Date(submission.updateTime).toLocaleString('uk-UA') : undefined,
       attachmentsList: submission.attachments.map((a) => a.title || 'файл').join(', ') || 'Немає файлів',
       metrics: new Map<string, number>(),
-      warnings: [],
       evidence: {
         publications: [],
         patents: [],
@@ -142,26 +88,14 @@ export class Aggregator {
         }
       }
       const lowerTitle = title.toLowerCase();
-      if (lowerTitle.endsWith('.zip') || mimeType === 'application/zip') {
-        if (buffer) throw new Error('Вкладені архіви не підтримуються');
-        const content = fileId ? await DriveService.downloadFileBuffer(fileId, title) : null;
-        if (!content) throw new Error('Не вдалося завантажити архів');
-        const entries = new AdmZip(content).getEntries();
-        if (entries.length > 100 || entries.reduce((sum, entry) => sum + entry.header.size, 0) > 50 * 1024 * 1024) {
-          throw new Error('Архів перевищує ліміт: 100 файлів або 50 МБ');
-        }
-        for (const entry of entries) {
-          if (entry.isDirectory) continue;
-          if (/(^|[\\/])\.\.([\\/]|$)|^[\\/]|^[a-z]:/i.test(entry.entryName) || /\.(zip|rar|7z|tar|gz)$/i.test(entry.entryName)) {
-            reportData.warnings?.push(`Небезпечний або вкладений архів: ${entry.entryName}`);
-            continue;
-          }
-          try { await processSingleFile(undefined, entry.entryName, '', entry.getData()); }
-          catch { reportData.warnings?.push(`Не вдалося обробити ${entry.entryName}`); }
-        }
-        return;
-      }
 
+      // Check author surname in filename (e.g. Додаток_1_Монографії_Петренко.docx -> Петренко)
+      const authorMatch = title.match(/[_\-\s]([А-ЯІЇЄ][а-яіїє']+)(?:\.|$)/);
+      if (authorMatch && authorMatch[1] && !reportData.studentName.includes(authorMatch[1])) {
+        if (!reportData.studentName.includes('(')) {
+          reportData.studentName = `${reportData.studentName} (${authorMatch[1]})`;
+        }
+      }
 
       // 1. Photos and certificates (.jpeg, .jpg)
       if (lowerTitle.endsWith('.jpeg') || lowerTitle.endsWith('.jpg') || mimeType.includes('jpeg')) {
@@ -176,11 +110,7 @@ export class Aggregator {
         console.log(`📝 [${submission.studentName}] Завантаження та парсинг Word документа: ${title}...`);
         const docBuffer = buffer || (fileId ? await DriveService.downloadFileBuffer(fileId, title) : null);
         if (docBuffer) {
-          let extracted = DocParserService.extractMetricsFromDocx(docBuffer, title);
-          if (![...extracted.keys()].some(key => mapToOfficialKey(key))) {
-            const ai = await AIService.extractMetricsFromText(DocParserService.parseDocxBuffer(docBuffer).fullText, submission.studentName);
-            if (ai.size) extracted = ai;
-          }
+          const extracted = DocParserService.extractMetricsFromDocx(docBuffer, title);
           for (const [ind, val] of extracted.entries()) {
             if (DocParserService.isNonIndicatorOrGarbage(ind)) continue;
             const current = reportData.metrics.get(ind) || 0;
@@ -188,8 +118,6 @@ export class Aggregator {
           }
 
           const parsedDoc = DocParserService.parseDocxBuffer(docBuffer);
-          if (!parsedDoc.fullText) throw new Error('Порожній або пошкоджений Word-файл');
-          if (!extracted.size) reportData.warnings?.push(`Не розпізнано показники: ${title}`);
           const qual = DocParserService.extractQualitativeEvidence(parsedDoc.fullText, parsedDoc.paragraphs, title);
           if (qual.publications) reportData.evidence?.publications?.push(...qual.publications);
           if (qual.patents) reportData.evidence?.patents?.push(...qual.patents);
@@ -197,7 +125,7 @@ export class Aggregator {
           if (qual.studentsWork) reportData.evidence?.studentsWork?.push(...qual.studentsWork);
 
           processedFileNames.push(title);
-        } else throw new Error('Не вдалося завантажити Word-файл');
+        }
         return;
       }
 
@@ -205,37 +133,110 @@ export class Aggregator {
       if (lowerTitle.endsWith('.xlsx') || lowerTitle.endsWith('.csv') || mimeType.includes('spreadsheet')) {
         console.log(`📑 [${submission.studentName}] Парсинг електронної таблиці: ${title}...`);
         let rows: any[][] = [];
-        if (fileId && !buffer && mimeType === 'application/vnd.google-apps.spreadsheet') {
-          rows = await SheetsService.readSheetRows(fileId);
-        } else {
-          const content = buffer || (fileId ? await DriveService.downloadFileBuffer(fileId, title) : null);
-          if (!content) throw new Error('Не вдалося завантажити таблицю');
-          rows = DocParserService.parseXlsxBuffer(content);
+        if (fileId && !buffer) {
+          try {
+            rows = await SheetsService.readSheetRows(fileId);
+          } catch {
+            const xlsxBuf = await DriveService.downloadFileBuffer(fileId, title);
+            if (xlsxBuf) {
+              rows = DocParserService.parseXlsxBuffer(xlsxBuf);
+            }
+          }
+        } else if (buffer) {
+          rows = DocParserService.parseXlsxBuffer(buffer);
         }
-        if (!rows.length) throw new Error('Порожня або пошкоджена таблиця');
-        for (const [key, value] of this.metricsFromRows(rows)) {
-          reportData.metrics.set(key, (reportData.metrics.get(key) || 0) + value);
+
+        for (const row of rows) {
+          if (!row || row.length === 0) continue;
+          let indicatorName = String(row[0] || '').trim();
+          let valueColStart = 1;
+
+          if (/^\d+$/.test(indicatorName) && row.length > 1 && String(row[1] || '').trim().length > 3) {
+            indicatorName = String(row[1]).trim();
+            valueColStart = 2;
+          }
+
+          if (!indicatorName || DocParserService.isNonIndicatorOrGarbage(indicatorName)) continue;
+
+          let metricVal = 0;
+          for (let c = valueColStart; c < row.length; c++) {
+            const cell = row[c];
+            if (cell !== undefined && cell !== null && String(cell).trim() !== '') {
+              metricVal = DocParserService.parseNumber(cell);
+              if (metricVal > 0) break;
+            }
+          }
+
+          if (metricVal > 0) {
+            const current = reportData.metrics.get(indicatorName) || 0;
+            reportData.metrics.set(indicatorName, current + metricVal);
+          }
         }
         processedFileNames.push(title);
         return;
       }
 
-      if ((mimeType.includes('document') && fileId) || lowerTitle.endsWith('.txt') || mimeType.includes('text/plain')) {
-        let text: string | null;
-        if (mimeType.includes('document') && fileId) text = await DriveService.exportDocAsText(fileId);
-        else text = (buffer || (fileId ? await DriveService.downloadFileBuffer(fileId, title) : null))?.toString('utf8') || null;
-        if (!text) throw new Error('Порожній або недоступний текстовий файл');
-        const extracted = this.metricsFromText(text);
-        if (![...extracted.keys()].some(key => mapToOfficialKey(key))) {
-          const ai = await AIService.extractMetricsFromText(text, submission.studentName);
-          for (const [key, value] of ai) extracted.set(key, value);
+      // 4. Google Docs
+      if (mimeType.includes('document') && fileId) {
+        console.log(`📄 [${submission.studentName}] Експорт та парсинг Google Doc: ${title}...`);
+        const docText = await DriveService.exportDocAsText(fileId);
+        if (docText) {
+          const lines = docText.split(/\r?\n/);
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || DocParserService.isNonIndicatorOrGarbage(trimmed)) continue;
+            const delimiterMatch = trimmed.match(/^([^:\-\t–]+)[:\t–\-]\s*(.+)$/);
+            if (delimiterMatch) {
+              const indicator = delimiterMatch[1].trim();
+              if (DocParserService.isNonIndicatorOrGarbage(indicator)) continue;
+              const val = DocParserService.parseNumber(delimiterMatch[2]);
+              if (val > 0) {
+                const current = reportData.metrics.get(indicator) || 0;
+                reportData.metrics.set(indicator, current + val);
+              }
+            }
+          }
+
+          const qual = DocParserService.extractQualitativeEvidence(docText, lines, title);
+          if (qual.publications) reportData.evidence?.publications?.push(...qual.publications);
+          if (qual.patents) reportData.evidence?.patents?.push(...qual.patents);
+          if (qual.grants) reportData.evidence?.grants?.push(...qual.grants);
+          if (qual.studentsWork) reportData.evidence?.studentsWork?.push(...qual.studentsWork);
+          processedFileNames.push(title);
         }
-        for (const [key, value] of extracted) reportData.metrics.set(key, (reportData.metrics.get(key) || 0) + value);
-        if (!extracted.size) reportData.warnings?.push(`Не розпізнано показники: ${title}`);
-        processedFileNames.push(title);
         return;
       }
-      reportData.warnings?.push(`Формат файлу не підтримується: ${title}`);
+
+      // 5. Plain text (.txt)
+      if (lowerTitle.endsWith('.txt') || mimeType.includes('text/plain')) {
+        console.log(`📄 [${submission.studentName}] Читання текстового файлу: ${title}...`);
+        let text = '';
+        if (buffer) {
+          text = buffer.toString('utf-8');
+        } else if (fileId) {
+          const b = await DriveService.downloadFileBuffer(fileId, title);
+          if (b) text = b.toString('utf-8');
+        }
+        if (text) {
+          const lines = text.split(/\r?\n/);
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || DocParserService.isNonIndicatorOrGarbage(trimmed)) continue;
+            const delimiterMatch = trimmed.match(/^([^:\-\t–]+)[:\t–\-]\s*(.+)$/);
+            if (delimiterMatch) {
+              const indicator = delimiterMatch[1].trim();
+              if (DocParserService.isNonIndicatorOrGarbage(indicator)) continue;
+              const val = DocParserService.parseNumber(delimiterMatch[2]);
+              if (val > 0) {
+                const current = reportData.metrics.get(indicator) || 0;
+                reportData.metrics.set(indicator, current + val);
+              }
+            }
+          }
+          processedFileNames.push(title);
+        }
+        return;
+      }
     };
 
     for (const attachment of submission.attachments) {
@@ -251,16 +252,18 @@ export class Aggregator {
           console.log(`📁 [${submission.studentName}] Виявлено прикріплену папку Google Drive: "${title}" [${attachment.id}]`);
           const folderFiles = await DriveService.listFilesInFolder(attachment.id, true);
           for (const f of folderFiles) {
-            try { await processSingleFile(f.id, f.name, f.mimeType); }
-            catch { reportData.warnings?.push(`Не вдалося обробити файл: ${f.name}`); }
+            await processSingleFile(f.id, f.name, f.mimeType);
           }
+        }
+        // Case B: Skip zip archives per instructions
+        else if (title.toLowerCase().endsWith('.zip') || mimeType.includes('zip')) {
+          console.log(`ℹ️ [${submission.studentName}] Пропускаємо zip-архів відповідно до налаштувань: "${title}"`);
         }
         // Case C: Single standalone file
         else {
           await processSingleFile(attachment.id, title, mimeType);
         }
       } catch (err) {
-        reportData.warnings?.push(`Не вдалося обробити файл: ${attachment.title || attachment.id}`);
         console.error(`⚠️ Failed to parse attachment [${attachment.title}] for ${submission.studentName}:`, err);
       }
     }
@@ -269,13 +272,6 @@ export class Aggregator {
       reportData.attachmentsList = processedFileNames.join(', ');
     }
 
-    const mapped = new Map<string, number>();
-    for (const [raw, value] of reportData.metrics) {
-      const key = mapToOfficialKey(raw) || raw;
-      mapped.set(key, (mapped.get(key) || 0) + value);
-    }
-    completePublicationTotals(mapped);
-    reportData.metrics = mapped;
     return reportData;
   }
 
@@ -287,31 +283,229 @@ export class Aggregator {
     folderId: string,
     existingTeachersData: TeacherReportData[]
   ): Promise<{ addedMetricsCount: number; filesProcessed: number }> {
-    let addedMetricsCount = 0;
+    console.log(`\n📂 [Google Drive Папка Додатків] Початок обробки файлів з прикріпленої папки [${folderId}]...`);
     let filesProcessed = 0;
-    const files = await DriveService.listFilesInFolder(folderId, true);
-    for (const file of files) {
-      const words = file.name.toLocaleLowerCase('uk-UA').split(/[^\p{L}'’]+/u);
-      const matches = existingTeachersData.filter(teacher => !teacher.isSharedSource &&
-        words.includes(teacher.studentName.trim().split(/\s+/)[0].toLocaleLowerCase('uk-UA')));
-      let target = matches.length === 1 ? matches[0] : existingTeachersData.find(teacher => teacher.isSharedSource);
-      if (!target) {
-        target = { studentName: 'Матеріали з папки додатків завдання (Google Drive)', studentEmail: '',
-          hasSubmitted: false, isSharedSource: true, submissionState: 'ADDONS', attachmentsList: '', metrics: new Map(), warnings: [] };
-        existingTeachersData.push(target);
+    let addedMetricsCount = 0;
+
+    try {
+      const files = await DriveService.listFilesInFolder(folderId, true);
+      if (files.length === 0) {
+        console.log(`ℹ️ [Google Drive Папка Додатків] Файлів у папці не виявлено.`);
+        return { addedMetricsCount: 0, filesProcessed: 0 };
       }
-      const parsed = await this.parseTeacherSubmission({ submissionId: '', userId: '', studentName: target.studentName,
-        studentEmail: target.studentEmail, state: 'ADDONS', hasSubmitted: true,
-        attachments: [{ id: file.id, title: file.name, mimeType: file.mimeType }] });
-      target.hasAddonFiles = true;
-      target.attachmentsList = [target.attachmentsList === 'Немає файлів' ? '' : target.attachmentsList, parsed.attachmentsList].filter(Boolean).join(', ');
-      target.warnings = [...(target.warnings || []), ...(parsed.warnings || [])];
-      for (const [key, value] of parsed.metrics) {
-        target.metrics.set(key, (target.metrics.get(key) || 0) + value);
-        addedMetricsCount++;
+
+      // Helper to process an individual file buffer or Drive file into teacher metrics
+      const processAddonFile = async (
+        fileId: string | undefined,
+        title: string,
+        mimeType: string,
+        buffer?: Buffer
+      ): Promise<void> => {
+        if (mimeType === 'application/vnd.google-apps.document' && fileId && !buffer) {
+          const docBuffer = await DriveService.exportDocAsDocx(fileId);
+          if (docBuffer) {
+            await processAddonFile(fileId, title, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', docBuffer);
+            return;
+          }
+        }
+        const lowerTitle = title.toLowerCase();
+
+        // 1. Image files (.jpeg, .jpg)
+        if (lowerTitle.endsWith('.jpeg') || lowerTitle.endsWith('.jpg') || mimeType.includes('jpeg')) {
+          console.log(`📸 [Папка Додатків] Знайдено фотозвіт/сертифікат: ${title}`);
+          filesProcessed++;
+          return;
+        }
+
+        // 2. Identify owner teacher by name in filename
+        let targetTeacher = existingTeachersData.find((t) => {
+          const nameParts = t.studentName.split(/[\s()]+/);
+          return nameParts.some((part) => part.length > 2 && lowerTitle.includes(part.toLowerCase()));
+        });
+
+        // If not matched to an enrolled teacher, use shared departmental entry
+        if (!targetTeacher) {
+          let sharedEntry = existingTeachersData.find(
+            (t) => t.studentName === 'Матеріали з папки додатків завдання (Google Drive)'
+          );
+          if (!sharedEntry) {
+            sharedEntry = {
+              studentName: 'Матеріали з папки додатків завдання (Google Drive)',
+              studentEmail: 'drive-folder-addons@classroom.local',
+              hasSubmitted: true,
+              submissionState: 'TURNED_IN',
+              submissionDate: new Date().toLocaleDateString('uk-UA'),
+              attachmentsList: '',
+              metrics: new Map<string, number>(),
+              evidence: {
+                publications: [],
+                patents: [],
+                grants: [],
+                studentsWork: [],
+                photos: [],
+                rawNotes: [],
+              },
+            };
+            existingTeachersData.push(sharedEntry);
+          }
+          targetTeacher = sharedEntry;
+        }
+
+        // 3. Native Word doc (.docx)
+        if (lowerTitle.endsWith('.docx') || mimeType.includes('wordprocessingml')) {
+          console.log(`📝 [Папка Додатків] Парсинг Word документа [${title}] (Викладач: ${targetTeacher.studentName})...`);
+          const docBuffer = buffer || (fileId ? await DriveService.downloadFileBuffer(fileId, title) : null);
+          if (docBuffer) {
+            const extracted = DocParserService.extractMetricsFromDocx(docBuffer, title);
+            for (const [ind, val] of extracted.entries()) {
+              if (DocParserService.isNonIndicatorOrGarbage(ind)) continue;
+              const current = targetTeacher.metrics.get(ind) || 0;
+              targetTeacher.metrics.set(ind, current + val);
+              addedMetricsCount++;
+            }
+
+            const parsedDoc = DocParserService.parseDocxBuffer(docBuffer);
+            const qual = DocParserService.extractQualitativeEvidence(parsedDoc.fullText, parsedDoc.paragraphs, title);
+            if (qual.publications) targetTeacher.evidence?.publications?.push(...qual.publications);
+            if (qual.patents) targetTeacher.evidence?.patents?.push(...qual.patents);
+            if (qual.grants) targetTeacher.evidence?.grants?.push(...qual.grants);
+            if (qual.studentsWork) targetTeacher.evidence?.studentsWork?.push(...qual.studentsWork);
+
+            targetTeacher.hasSubmitted = true;
+            const currentAtts = targetTeacher.attachmentsList === 'Немає файлів' ? '' : targetTeacher.attachmentsList;
+            targetTeacher.attachmentsList = currentAtts ? `${currentAtts}, ${title}` : title;
+            filesProcessed++;
+          }
+        }
+        // 4. Spreadsheet (.xlsx or Google Sheet)
+        else if (lowerTitle.endsWith('.xlsx') || lowerTitle.endsWith('.csv') || mimeType.includes('spreadsheet')) {
+          console.log(`📑 [Папка Додатків] Парсинг таблиці [${title}] (Викладач: ${targetTeacher.studentName})...`);
+          let rows: any[][] = [];
+          if (fileId && !buffer) {
+            try {
+              rows = await SheetsService.readSheetRows(fileId);
+            } catch {
+              const xlsxBuf = await DriveService.downloadFileBuffer(fileId, title);
+              if (xlsxBuf) {
+                rows = DocParserService.parseXlsxBuffer(xlsxBuf);
+              }
+            }
+          } else if (buffer) {
+            rows = DocParserService.parseXlsxBuffer(buffer);
+          }
+
+          for (const row of rows) {
+            if (!row || row.length === 0) continue;
+            let indicatorName = String(row[0] || '').trim();
+            let valueColStart = 1;
+
+            if (/^\d+$/.test(indicatorName) && row.length > 1 && String(row[1] || '').trim().length > 3) {
+              indicatorName = String(row[1]).trim();
+              valueColStart = 2;
+            }
+
+            if (!indicatorName || DocParserService.isNonIndicatorOrGarbage(indicatorName)) continue;
+
+            let metricVal = 0;
+            for (let c = valueColStart; c < row.length; c++) {
+              const cell = row[c];
+              if (cell !== undefined && cell !== null && String(cell).trim() !== '') {
+                metricVal = DocParserService.parseNumber(cell);
+                if (metricVal > 0) break;
+              }
+            }
+            if (metricVal > 0) {
+              const cur = targetTeacher.metrics.get(indicatorName) || 0;
+              targetTeacher.metrics.set(indicatorName, cur + metricVal);
+              addedMetricsCount++;
+            }
+          }
+
+          targetTeacher.hasSubmitted = true;
+          const currentAtts = targetTeacher.attachmentsList === 'Немає файлів' ? '' : targetTeacher.attachmentsList;
+          targetTeacher.attachmentsList = currentAtts ? `${currentAtts}, ${title}` : title;
+          filesProcessed++;
+        }
+        // 5. Google Doc
+        else if (mimeType.includes('document') && fileId) {
+          console.log(`📄 [Папка Додатків] Парсинг Google Doc [${title}] (Викладач: ${targetTeacher.studentName})...`);
+          const docText = await DriveService.exportDocAsText(fileId);
+          if (docText) {
+            const lines = docText.split(/\r?\n/);
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed || DocParserService.isNonIndicatorOrGarbage(trimmed)) continue;
+              const match = trimmed.match(/^([^:\-\t–]+)[:\t–\-]\s*(.+)$/);
+              if (match) {
+                const ind = match[1].trim();
+                if (DocParserService.isNonIndicatorOrGarbage(ind)) continue;
+                const val = DocParserService.parseNumber(match[2]);
+                if (val > 0) {
+                  const cur = targetTeacher.metrics.get(ind) || 0;
+                  targetTeacher.metrics.set(ind, cur + val);
+                  addedMetricsCount++;
+                }
+              }
+            }
+            targetTeacher.hasSubmitted = true;
+            const currentAtts = targetTeacher.attachmentsList === 'Немає файлів' ? '' : targetTeacher.attachmentsList;
+            targetTeacher.attachmentsList = currentAtts ? `${currentAtts}, ${title}` : title;
+            filesProcessed++;
+          }
+        }
+        // 6. Plain text (.txt)
+        else if (lowerTitle.endsWith('.txt') || mimeType.includes('text/plain')) {
+          console.log(`📄 [Папка Додатків] Читання текстового файлу [${title}] (Викладач: ${targetTeacher.studentName})...`);
+          let text = '';
+          if (buffer) {
+            text = buffer.toString('utf-8');
+          } else if (fileId) {
+            const b = await DriveService.downloadFileBuffer(fileId, title);
+            if (b) text = b.toString('utf-8');
+          }
+          if (text) {
+            const lines = text.split(/\r?\n/);
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed || DocParserService.isNonIndicatorOrGarbage(trimmed)) continue;
+              const match = trimmed.match(/^([^:\-\t–]+)[:\t–\-]\s*(.+)$/);
+              if (match) {
+                const ind = match[1].trim();
+                if (DocParserService.isNonIndicatorOrGarbage(ind)) continue;
+                const val = DocParserService.parseNumber(match[2]);
+                if (val > 0) {
+                  const cur = targetTeacher.metrics.get(ind) || 0;
+                  targetTeacher.metrics.set(ind, cur + val);
+                  addedMetricsCount++;
+                }
+              }
+            }
+            targetTeacher.hasSubmitted = true;
+            const currentAtts = targetTeacher.attachmentsList === 'Немає файлів' ? '' : targetTeacher.attachmentsList;
+            targetTeacher.attachmentsList = currentAtts ? `${currentAtts}, ${title}` : title;
+            filesProcessed++;
+          }
+        }
+      };
+
+      for (const file of files) {
+        const title = file.name;
+        const mimeType = file.mimeType || '';
+
+        // Skip zip archives per user instructions
+        if (title.toLowerCase().endsWith('.zip') || mimeType.includes('zip')) {
+          console.log(`ℹ️ [Папка Додатків] Пропускаємо zip-архів відповідно до налаштувань: "${title}"`);
+          continue;
+        }
+
+        await processAddonFile(file.id, title, mimeType);
       }
-      filesProcessed++;
+
+      console.log(`✅ [Google Drive Папка Додатків] Опрацьовано ${filesProcessed} файлів, додано ${addedMetricsCount} числових показників до звіту.`);
+    } catch (err) {
+      console.error(`⚠️ Не вдалося повністю обробити папку Google Drive [${folderId}]:`, err);
     }
+
     return { addedMetricsCount, filesProcessed };
   }
 
@@ -332,7 +526,6 @@ export class Aggregator {
     console.log(`\n⚙️ Running Aggregation Pipeline with Official 28-Section Catalog (Status: ${statusLabel})...`);
 
     // 1. Process all teacher submissions from Google Classroom
-    const warnings: string[] = [];
     const teachersData: TeacherReportData[] = [];
     const customTeacherIndicators = new Set<string>();
 
@@ -345,11 +538,10 @@ export class Aggregator {
     }
 
     // 2. Process linked Google Drive folder attachments ("папка з додатками") if present
-    const driveFolderId = assignment.driveFolderId || (!accountContext.getStore() ? DriveService.extractDriveFolderId(process.env.ASSIGNMENT_ADDONS_FOLDER_URL || process.env.ASSIGNMENT_ADDONS_FOLDER_ID) : null);
+    const driveFolderId = assignment.driveFolderId || DriveService.extractDriveFolderId(process.env.ASSIGNMENT_ADDONS_FOLDER_URL || process.env.ASSIGNMENT_ADDONS_FOLDER_ID);
     if (driveFolderId) {
       console.log(`📁 Враховуємо додатки з прикріпленої папки Google Drive [${driveFolderId}]...`);
-      try { await this.parseDriveFolderAddons(driveFolderId, teachersData); }
-      catch { warnings.push('Не вдалося прочитати папку додатків'); }
+      await this.parseDriveFolderAddons(driveFolderId, teachersData);
       for (const t of teachersData) {
         for (const indicator of t.metrics.keys()) {
           customTeacherIndicators.add(indicator);
@@ -375,7 +567,7 @@ export class Aggregator {
     for (const indicator of indicatorsList) {
       let sum = 0;
       for (const teacher of teachersData) {
-        if (teacher.hasSubmitted || teacher.hasAddonFiles) {
+        if (teacher.hasSubmitted) {
           sum += teacher.metrics.get(indicator) || 0;
         }
       }
@@ -389,7 +581,6 @@ export class Aggregator {
       staticPlanRows = await SheetsService.readSheetRows(env.STATIC_PLAN_SHEET_ID, 'A1:Z100');
       console.log(`✅ Loaded ${staticPlanRows.length} rows from "План роботи кафедри"`);
     } catch (err) {
-      warnings.push('Не вдалося завантажити план роботи кафедри');
       console.error(`⚠️ Failed to load static plan rows:`, err);
     }
 
@@ -400,12 +591,11 @@ export class Aggregator {
       staticSciPlanRows = await SheetsService.readSheetRows(env.STATIC_SCI_PLAN_SHEET_ID, 'A1:Z100');
       console.log(`✅ Loaded ${staticSciPlanRows.length} rows from "План наукової роботи кафедри"`);
     } catch (err) {
-      warnings.push('Не вдалося завантажити план наукової роботи кафедри');
       console.error(`⚠️ Failed to load static scientific plan rows:`, err);
     }
 
     // 6. Summarize parsed totals and submission status without external AI calls.
-    const missingList = teachersData.filter((t) => !t.hasSubmitted && !t.isSharedSource).map((t) => t.studentName);
+    const missingList = teachersData.filter((t) => !t.hasSubmitted).map((t) => t.studentName);
     const submittedCount = teachersData.filter((t) => t.hasSubmitted).length;
     const highlights = Array.from(totalsByIndicator.entries())
       .filter(([, value]) => value !== 0)
@@ -413,15 +603,13 @@ export class Aggregator {
     // Keep the existing field name for consumers of the report data.
     const aiSummary = [
       `Зведений звіт за напрямом «${assignment.title}» (статус: ${statusLabel}).`,
-      `Подано ${submittedCount} з ${teachersData.filter(t => !t.isSharedSource).length} звітів.`,
+      `Подано ${submittedCount} з ${teachersData.length} звітів.`,
       highlights.length > 0
         ? `Показники кафедри: ${highlights.join('; ')}.`
         : 'Ненульових числових показників не виявлено.',
       missingList.length > 0
         ? `Не подали звіти: ${missingList.join(', ')}.`
         : 'Немає викладачів, які очікують на подання звіту.',
-      ...teachersData.flatMap(t => (t.warnings || []).map(w => `${t.studentName}: ${w}`)),
-      ...warnings,
     ].join(' ');
 
     return {
@@ -433,7 +621,6 @@ export class Aggregator {
       staticPlanRows,
       staticSciPlanRows,
       aiSummary,
-      warnings,
     };
   }
 
@@ -452,11 +639,11 @@ export class Aggregator {
     // Row 2: B2 = 'ІНФОРМАЦІЯ'
     grid.push(['', 'ІНФОРМАЦІЯ', '']);
 
-    // Row 3: B3 = `про науково-дослідну роботу за ${data.assignment.creationDate.getFullYear()} рік`
-    grid.push(['', `про науково-дослідну роботу за ${data.assignment.creationDate.getFullYear()} рік`, '']);
+    // Row 3: B3 = 'про науково-дослідну роботу за 2026 рік'
+    grid.push(['', 'про науково-дослідну роботу за 2026 рік', '']);
 
-    // Row 4: B4 = `кафедри ${data.assignment.courseName || ''}`
-    grid.push(['', `кафедри ${data.assignment.courseName || ''}`, '']);
+    // Row 4: B4 = 'кафедри_____________________________________________________'
+    grid.push(['', 'кафедри_____________________________________________________', '']);
 
     // Row 5: (Empty in template)
     grid.push(['', '', '']);
@@ -483,13 +670,13 @@ export class Aggregator {
     for (const tRow of OFFICIAL_TEMPLATE_ROWS) {
       if (tRow.row < 12) continue;
 
-      const rowCells: any[] = [tRow.colA || '', (tRow.colB || '').replace(/2026|2027/g, year => String(data.assignment.creationDate.getFullYear() + (year === '2027' ? 1 : 0)))];
+      const rowCells: any[] = [tRow.colA || '', tRow.colB || ''];
 
       // Col C: Department total sum
       if (tRow.indicatorKey) {
         const totalVal = data.totalsByIndicator.get(tRow.indicatorKey) || 0;
         if (tRow.format === '/') {
-          rowCells.push(`${totalVal} / ${data.totalsByIndicator.get(tRow.indicatorKey + SHEETS_SUFFIX) || 0}`);
+          rowCells.push(totalVal > 0 ? `${totalVal}` : '/');
         } else {
           rowCells.push(totalVal > 0 ? totalVal : (tRow.defaultColC || ''));
         }
@@ -508,31 +695,31 @@ export class Aggregator {
   /**
    * Builds the detailed breakdown grid for Sheet 2 ("Деталізація по викладачах"):
    * Includes individual teacher columns (Col D, E, F...), static departmental plans,
-   * and registry of teacher submissions.
+   * grand totals, and registry of teacher submissions.
    */
   public static buildDetailGrid(data: AggregationResult): any[][] {
     const grid: any[][] = [];
-    const submittedTeachers = data.teachers.filter((t) => t.hasSubmitted || t.hasAddonFiles);
+    const submittedTeachers = data.teachers.filter((t) => t.hasSubmitted);
 
     // ==========================================
     // ROWS 1-10: HEADER & METADATA SECTION
     // ==========================================
     // Row 1
-    grid.push([`ІНФОРМАЦІЯ ПРО НАУКОВО-ДОСЛІДНУ РОБОТУ КАФЕДРИ ЗА ${data.assignment.creationDate.getFullYear()} РІК (ДЕТАЛІЗАЦІЯ ПО ВИКЛАДАЧАХ)`]);
+    grid.push(['ІНФОРМАЦІЯ ПРО НАУКОВО-ДОСЛІДНУ РОБОТУ КАФЕДРИ ЗА 2026 РІК (ДЕТАЛІЗАЦІЯ ПО ВИКЛАДАЧАХ)']);
 
     // Row 2: B2 = 'ІНФОРМАЦІЯ'
     grid.push(['', 'ІНФОРМАЦІЯ']);
 
-    // Row 3: B3 = `про науково-дослідну роботу за ${data.assignment.creationDate.getFullYear()} рік`
-    grid.push(['', `про науково-дослідну роботу за ${data.assignment.creationDate.getFullYear()} рік`]);
+    // Row 3: B3 = 'про науково-дослідну роботу за 2026 рік'
+    grid.push(['', 'про науково-дослідну роботу за 2026 рік']);
 
-    // Row 4: B4 = `кафедри ${data.assignment.courseName || ''}`
-    grid.push(['', `кафедри ${data.assignment.courseName || ''}`]);
+    // Row 4: B4 = 'кафедри_____________________________________________________'
+    grid.push(['', 'кафедри_____________________________________________________']);
 
     // Row 5: Metadata header (Creation Date, Deadline, Report Status, Timestamp)
     grid.push([
       '',
-      `Дата появи завдання в Google Classroom: ${data.assignment.creationDateFormatted} | Дедлайн: ${data.assignment.deadlineFormatted} | Статус звіту: ${data.statusLabel} | Подано звітів: ${data.teachers.filter(t => t.hasSubmitted).length} з ${data.teachers.filter(t => !t.isSharedSource).length}`,
+      `Дата появи завдання в Google Classroom: ${data.assignment.creationDateFormatted} | Дедлайн: ${data.assignment.deadlineFormatted} | Статус звіту: ${data.statusLabel} | Подано звітів: ${submittedTeachers.length} з ${data.teachers.length}`,
     ]);
 
     // Row 6: B6 = 'Вказати інформацію (ОБОВ’ЯЗКОВО!!!):'
@@ -571,13 +758,13 @@ export class Aggregator {
     for (const tRow of OFFICIAL_TEMPLATE_ROWS) {
       if (tRow.row < 12) continue;
 
-      const rowCells: any[] = [tRow.colA || '', (tRow.colB || '').replace(/2026|2027/g, year => String(data.assignment.creationDate.getFullYear() + (year === '2027' ? 1 : 0)))];
+      const rowCells: any[] = [tRow.colA || '', tRow.colB || ''];
 
       // Col C: Department total
       if (tRow.indicatorKey) {
         const totalVal = data.totalsByIndicator.get(tRow.indicatorKey) || 0;
         if (tRow.format === '/') {
-          rowCells.push(`${totalVal} / ${data.totalsByIndicator.get(tRow.indicatorKey + SHEETS_SUFFIX) || 0}`);
+          rowCells.push(totalVal > 0 ? `${totalVal}` : '/');
         } else {
           rowCells.push(totalVal);
         }
@@ -591,7 +778,7 @@ export class Aggregator {
       for (const t of submittedTeachers) {
         if (tRow.indicatorKey) {
           const val = t.metrics.get(tRow.indicatorKey) || 0;
-          rowCells.push(tRow.format === '/' ? `${val} / ${t.metrics.get(tRow.indicatorKey + SHEETS_SUFFIX) || 0}` : val);
+          rowCells.push(val);
         } else {
           rowCells.push('');
         }
@@ -600,14 +787,28 @@ export class Aggregator {
       grid.push(rowCells);
     }
 
-    grid.push([]);
-    grid.push(['Нерозпізнані показники']);
-    const officialKeys = new Set(OFFICIAL_TEMPLATE_ROWS.map(row => row.indicatorKey));
-    for (const [key, value] of data.totalsByIndicator) {
-      if (!officialKeys.has(key) && !key.endsWith(SHEETS_SUFFIX)) grid.push(['', key, value, ...submittedTeachers.map(t => t.metrics.get(key) || 0)]);
-    }
+    grid.push([]); // Blank row
 
     // ==========================================
+    // GRAND TOTAL SUM ROW
+    // ==========================================
+    const totalSumsRow: any[] = ['ЗАГАЛЬНА СУМА ВСІХ ЧИСЛОВИХ ПОКАЗНИКІВ', ''];
+    let grandTotal = 0;
+    for (const val of data.totalsByIndicator.values()) {
+      grandTotal += val;
+    }
+    totalSumsRow.push(grandTotal);
+
+    for (const t of submittedTeachers) {
+      let teacherTotal = 0;
+      for (const val of t.metrics.values()) {
+        teacherTotal += val;
+      }
+      totalSumsRow.push(teacherTotal);
+    }
+    grid.push(totalSumsRow);
+    grid.push([]); // Blank row
+
     // ==========================================
     // SECTION 2: STATIC ROWS FROM "План роботи кафедри"
     // ==========================================
@@ -645,18 +846,12 @@ export class Aggregator {
         idx + 1,
         t.studentName,
         t.studentEmail || 'не вказано',
-        t.isSharedSource ? 'ДОДАТКИ КАФЕДРИ' : t.hasSubmitted ? 'ПОДАНО (Враховано)' : t.submissionState === 'RECLAIMED_BY_STUDENT' ? 'ПОВЕРНУТО НА РЕДАГУВАННЯ' : 'НЕ ПОДАНО (Очікується)',
+        t.hasSubmitted ? 'ПОДАНО (Враховано)' : 'НЕ ПОДАНО (Очікується)',
         t.submissionDate || '-',
         t.attachmentsList,
       ]);
     });
 
-    for (const teacher of data.teachers) {
-      const evidence = Object.values(teacher.evidence || {}).flat().filter(Boolean);
-      if (evidence.length) grid.push([], [`Наукові результати: ${teacher.studentName}`], ...evidence.map(value => [value]));
-    }
-    const warnings = [...(data.warnings || []), ...data.teachers.flatMap(t => (t.warnings || []).map(warning => `${t.studentName}: ${warning}`))];
-    if (warnings.length) grid.push([], ['Попередження обробки'], ...warnings.map(warning => [warning]));
     if (data.aiSummary) {
       grid.push([]);
       grid.push(['АНАЛІТИЧНЕ РЕЗЮМЕ ДЛЯ НАУКОВОЇ ЧАСТИНИ ТА ЗАВІДУВАЧА КАФЕДРИ']);

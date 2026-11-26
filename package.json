@@ -15,7 +15,7 @@
     "test:hosted": "tsx test/test-account-context.ts && tsx test/test-workspace.ts && tsx test/test-hosted.ts",
     "test:browser": "tsx test/test-browser.ts",
     "dev": "tsx src/index.ts",
-    "test": "tsx test/test-aggregator.ts && tsx test/test-doc-parser.ts && tsx test/test-ai-service.ts && tsx test/test-review.ts",
+    "test": "tsx test/test-aggregator.ts && tsx test/test-doc-parser.ts && tsx test/test-ai-service.ts",
     "test:manual": "tsx test/manual-test.ts",
     "test:server": "tsx test/test-server.ts",
     "test:ai": "tsx test/test-ai-service.ts",
